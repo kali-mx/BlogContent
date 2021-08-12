@@ -1,3 +1,6 @@
+#adapted and slightly modified for better performance and cleaner output
+#special thanks to GeardoRanger @ https://github.com/GeardoRanger
+
 from datetime import datetime, timedelta
 import time
 import subprocess
@@ -10,11 +13,11 @@ import ntplib
 import os
 
 #shared secret token for OTP calculation
-sharedSecret1 = 128939448577488
-sharedSecret2 = 592988748673453
-sharedSecret3 = 792513759492579
+sharedSecret1 = <INSERT TOKEN HERE>
+sharedSecret2 = <INSERT TOKEN HERE>
+sharedSecret3 = <INSERT TOKEN HERE>
 USER = "architect"
-RHOST = "10.10.243.129"
+RHOST = "10.10.243.129"  #CHANGE to IP of linux-bay server
 
 try:
     #import ntplib

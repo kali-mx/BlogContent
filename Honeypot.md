@@ -447,3 +447,31 @@ PORT      STATE    SERVICE
 |_ftp-libopie: ERROR: Script execution failed (use -d to debug)
 
 ```
+
+
+# Testing Github login page Port 80
+
+``` bash
+
+(base) mx@M1 homebrew % nslookup github.com
+Server:		2001:578:3f::30
+Address:	2001:578:3f::30#53
+
+Non-authoritative answer:
+Name:	github.com
+Address: 140.82.114.3
+
+(base) mx@M1 homebrew % nslookup 172.20.254.127
+Server:		2001:578:3f::30
+Address:	2001:578:3f::30#53
+
+** server can't find 127.254.20.172.in-addr.arpa: NXDOMAIN
+
+(base) mx@M1 homebrew % nslookup http://172.20.254.127
+Server:		2001:578:3f::30
+Address:	2001:578:3f::30#53
+
+** server can't find http://172.20.254.127: NXDOMAIN
+
+```
+![github]()

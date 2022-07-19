@@ -475,3 +475,16 @@ Address:	2001:578:3f::30#53
 
 ```
 ![github](https://github.com/kalimax69/BlogContent/blob/main/burp.png)
+
+
+# Testing Port 9200 ElasticHoney.  Just ask google;)
+
+``` ruby
+
+elastichoney
+
+A Simple Elasticsearch Honeypot
+About
+
+Elastichoney is a simple elasticsearch honeypot designed to catch attackers exploiting RCE vulnerabilities in elasticsearch.
+

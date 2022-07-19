@@ -1,8 +1,8 @@
 # Recon
 
 
-![ shodan ](https://github.com/kalimax69/BlogContent/shodan.png)
-
+![ shodan ](https://github.com/kalimax69/BlogContent/blob/main/shodan.png)
+![honey](https://github.com/kalimax69/BlogContent/blob/main/honey.png)
 
 ``` ruby
 

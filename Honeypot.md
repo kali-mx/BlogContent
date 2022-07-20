@@ -421,9 +421,8 @@ msf6 auxiliary(scanner/smb/smb_ms17_010) >
 
 ``` bash
 
-─# nmap --script ftp-* p21 <REDACTED>                                                                                
+─# nmap --script ftp-* -p21 <REDACTED>                                                                                
 Starting Nmap 7.92 ( https://nmap.org ) at 2022-07-19 13:49 PDT
-Failed to resolve "p21".
 Stats: 0:00:05 elapsed; 0 hosts completed (0 up), 1 undergoing Ping Scan
 Ping Scan Timing: About 100.00% done; ETC: 13:50 (0:00:00 remaining)
 Nmap scan report for <REDACTED>.compute.amazonaws.com (<REDACTED>)
@@ -465,7 +464,7 @@ Address: 140.82.114.3
 Server:		2001:<REDACTED>
 Address:	2001:<REDACTED>
 
-** server can't find 127.254.20.172.in-addr.arpa: NXDOMAIN
+** server can't find <REDACTED>.in-addr.arpa: NXDOMAIN
 
 (base) mx@M1 homebrew % nslookup http://<REDACTED>
 Server:		2001:<REDACTED>

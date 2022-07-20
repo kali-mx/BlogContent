@@ -497,5 +497,5 @@ Elastichoney is a simple elasticsearch honeypot designed to catch attackers expl
 
 # Testing RDP, port 3389
 
-![rdp](https://user-images.githubusercontent.com/76034874/179864386-b4f45cb5-1e3a-4852-a492-826068439f66.png)
+![rdp](https://user-images.githubusercontent.com/76034874/180078692-6b1b0b1f-0c70-4cf1-bbd9-6506eb448cfc.png)
 

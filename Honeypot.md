@@ -1,7 +1,7 @@
 # Recon
 
 
-![ shodan ](https://github.com/kalimax69/BlogContent/blob/main/shodan.png)
+![shodan](https://github.com/kalimax69/BlogContent/blob/main/shodanR.png)
 
 ``` ruby
 
@@ -387,7 +387,7 @@ Certificate:
 
 ```
 
-![honey](https://github.com/kalimax69/BlogContent/blob/main/honey2.png)
+![honey](https://github.com/kalimax69/BlogContent/blob/main/honeyR.png)
 
  
  
@@ -454,27 +454,27 @@ PORT      STATE    SERVICE
 ``` bash
 
 (base) mx@M1 homebrew % nslookup github.com
-Server:		2001:578:3f::30
-Address:	2001:578:3f::30#53
+Server:		2001:<REDACTED>
+Address:	2001:<REDACTED>
 
 Non-authoritative answer:
 Name:	github.com
 Address: 140.82.114.3
 
 (base) mx@M1 homebrew % nslookup <REDACTED>
-Server:		2001:578:3f::30
-Address:	2001:578:3f::30#53
+Server:		2001:<REDACTED>
+Address:	2001:<REDACTED>
 
 ** server can't find 127.254.20.172.in-addr.arpa: NXDOMAIN
 
 (base) mx@M1 homebrew % nslookup http://<REDACTED>
-Server:		2001:578:3f::30
-Address:	2001:578:3f::30#53
+Server:		2001:<REDACTED>
+Address:	2001:<REDACTED>
 
 ** server can't find http://<REDACTED>: NXDOMAIN
 
 ```
-![github](https://github.com/kalimax69/BlogContent/blob/main/burp.png)
+![github](https://github.com/kalimax69/BlogContent/blob/main/burpR.png)
 
 
 # Testing Port 9200 ElasticHoney.  Just ask google;)
@@ -492,7 +492,7 @@ Elastichoney is a simple elasticsearch honeypot designed to catch attackers expl
 
 # Testing Citrix Login portal, port 443  (not functional)
 
-![443](https://github.com/kalimax69/BlogContent/blob/main/port443.png)
+![443](https://github.com/kalimax69/BlogContent/blob/main/port443R.png)
 
 
 # Testing RDP, port 3389

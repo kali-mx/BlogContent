@@ -5,9 +5,9 @@
 
 ``` ruby
 
-(base) mx@M1 homebrew % shodan host 18.220.190.92
-18.220.190.92
-Hostnames:               example.com;ec2-18-220-190-92.us-east-2.compute.amazonaws.com
+(base) mx@M1 homebrew % shodan host <REDACTED>
+<REDACTED>
+Hostnames:               example.com;<REDACTED>.compute.amazonaws.com
 City:                    Hilliard
 Country:                 United States
 Organization:            Amazon Technologies Inc.
@@ -396,8 +396,8 @@ Certificate:
  ``` bash
  
  ┌──(root💀kali)-[~/honeypot]
-└─# python2 ghost.py 18.220.190.92                                                                                           
-Getting resource at ajp13://18.220.190.92:8009/asdf
+└─# python2 ghost.py <REDACTED>                                                                                           
+Getting resource at ajp13://<REDACTED>:8009/asdf
 ----------------------------
 <!doctype html><html lang="en"><head><title>HTTP Status 404 – Not Found</title><style type="text/css">body {font-family:Tahoma,Arial,sans-serif;} h1, h2, h3, b {color:white;background-color:#525D76;} h1 {font-size:22px;} h2 {font-size:16px;} h3 {font-size:14px;} p {font-size:12px;} a {color:black;} .line {height:1px;background-color:#525D76;border:none;}</style></head><body><h1>HTTP Status 404 – Not Found</h1><hr class="line" /><p><b>Type</b> Status Report</p><p><b>Message</b> Not found</p><p><b>Description</b> The origin server did not find a current representation for the target resource or is not willing to disclose that one exists.</p><hr class="line" /><h3>Apache Tomcat/9.0.30</h3></body></html>
 
@@ -410,8 +410,8 @@ Getting resource at ajp13://18.220.190.92:8009/asdf
 
 msf6 auxiliary(scanner/smb/smb_ms17_010) > run
 
-[-] 18.220.190.92:445     - Rex::ConnectionTimeout: The connection with (18.220.190.92:445) timed out.
-[*] 18.220.190.92:445     - Scanned 1 of 1 hosts (100% complete)
+[-] <REDACTED>:445     - Rex::ConnectionTimeout: The connection with (<REDACTED>:445) timed out.
+[*] <REDACTED>:445     - Scanned 1 of 1 hosts (100% complete)
 [*] Auxiliary module execution completed
 msf6 auxiliary(scanner/smb/smb_ms17_010) > 
 
@@ -421,12 +421,12 @@ msf6 auxiliary(scanner/smb/smb_ms17_010) >
 
 ``` bash
 
-─# nmap --script ftp-* p21 18.220.190.92                                                                                  255 ⨯
+─# nmap --script ftp-* p21 <REDACTED>                                                                                
 Starting Nmap 7.92 ( https://nmap.org ) at 2022-07-19 13:49 PDT
 Failed to resolve "p21".
 Stats: 0:00:05 elapsed; 0 hosts completed (0 up), 1 undergoing Ping Scan
 Ping Scan Timing: About 100.00% done; ETC: 13:50 (0:00:00 remaining)
-Nmap scan report for ec2-18-220-190-92.us-east-2.compute.amazonaws.com (18.220.190.92)
+Nmap scan report for <REDACTED>.compute.amazonaws.com (<REDACTED>)
 Host is up (0.081s latency).
 Not shown: 143 closed tcp ports (reset)
 PORT      STATE    SERVICE
@@ -461,17 +461,17 @@ Non-authoritative answer:
 Name:	github.com
 Address: 140.82.114.3
 
-(base) mx@M1 homebrew % nslookup 172.20.254.127
+(base) mx@M1 homebrew % nslookup <REDACTED>
 Server:		2001:578:3f::30
 Address:	2001:578:3f::30#53
 
 ** server can't find 127.254.20.172.in-addr.arpa: NXDOMAIN
 
-(base) mx@M1 homebrew % nslookup http://172.20.254.127
+(base) mx@M1 homebrew % nslookup http://<REDACTED>
 Server:		2001:578:3f::30
 Address:	2001:578:3f::30#53
 
-** server can't find http://172.20.254.127: NXDOMAIN
+** server can't find http://<REDACTED>: NXDOMAIN
 
 ```
 ![github](https://github.com/kalimax69/BlogContent/blob/main/burp.png)

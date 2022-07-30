@@ -501,3 +501,11 @@ We are checking that every hex value from x00-FF is in order without any errors.
 
 ![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)
 
+## Finding the Jump Point
+### now we need to find an address in memory with the jmp esp instruction with no security features in place.  We can use this instruction to jump the program to an area of memory we control, which is pure evil (reverse shell).  We do this with mona, a tool in Immunity Debugger.  The syntax is !mona jmp -r esp
+
+![jmpesp](https://user-images.githubusercontent.com/76034874/181870587-18478525-0d60-4cd5-9e6b-81ed35f016b5.png)
+
+# Generating the reverse shell
+We use msfvenom.  Our test target is windows and it is an x86 binary:
+

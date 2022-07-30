@@ -496,7 +496,7 @@ def main():
 if __name__ == "__main__":
     main()    
 ```
-We are checking that every hex value from x00-FF is in order without any errors.  Here it is perfect:
+We are checking that every hex value from x00-FF is in order without any errors.  To do this right-click on the ESP and select Follow Dump from the menu.  Here it is good to go:
 
 
 ![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)

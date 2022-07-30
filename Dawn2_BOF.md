@@ -304,6 +304,6 @@ if __name__ == "__main__":
 ```    
 
 With Immunity Debugger run as Administrator on the Windows vm, we run the python script above, sending 500 byte encoded A's 
-and end it with a nullbyte as instructed by the message we found earlier.
+and end it with a nullbyte as instructed by the message we found earlier. We show we can overwrite the Execution Instruction Pointer (EIP) on the Stack with A's (ascii 41).  Buffer Overflow vulnerability likely exists.
 
-![test1]( )
+![test1](https://user-images.githubusercontent.com/76034874/181864956-0bf73890-b264-4522-89e8-fc1b6e5db3cf.png)

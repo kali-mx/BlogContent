@@ -670,3 +670,7 @@ payload = As + nullbyte
 ```
 
 
+#Root
+
+![root](https://user-images.githubusercontent.com/76034874/181872819-cce1a45a-54cd-4783-be6b-cf27ba062a62.png)
+

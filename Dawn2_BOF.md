@@ -509,3 +509,4 @@ We are checking that every hex value from x00-FF is in order without any errors.
 # Generating the reverse shell
 We use msfvenom.  Our test target is windows and it is an x86 binary:
 
+![revshell](https://user-images.githubusercontent.com/76034874/181870942-b910442c-0674-4e8b-8749-4a85c17f6adb.png)

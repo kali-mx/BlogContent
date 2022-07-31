@@ -1,6 +1,5 @@
 #!/usr/bin/python3
-# a simple data entry program that calculates truck fuel tax by state, storing data to disk in comma separated values (csv) format
-
+# a simple data entry program that calculates truck fuel tax by state, storing data to disk in comma separated values (csv)
 import subprocess,csv,os.path,os
 from functools import update_wrapper
 from typing import Any
@@ -9,14 +8,14 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd
 from art import tprint
 
-
 subprocess.call('clear', shell=True)   ##clear screen##
 
 states_db = {'MN':.04, 'WI':.05, 'CO':.06, 'NJ':.09}
 mpg = fuel_cost = start_mileage = end_mileage = 0
 
-tprint('Trucker_Count', font='smooth2')
-print('authored by: Max Ahartz\n','*'*40, '\n')
+tprint('Trucker_Count',font='smooth1')
+print('authored by: Thomas Ahartz\n')
+print('*'*40, '\n')
 
 def sanitised(prompt, type_=None, min_=None, max_=None, range_=None):
     if min_ is not None and max_ is not None and max_ < min_:
@@ -92,7 +91,7 @@ def enter_trip():
             # writing the data rows  
             csvwriter.writerow(rows)
         f.close()
-
+        main()
 
 
 def reports():
@@ -105,7 +104,7 @@ def reports():
     print('truck  taxes  gals  miles')
     print(sumfuel, '\n'*3)
     
-    #syntax souveneirs:
+    #syntax souveniers:
     #with open('data.txt', 'r') as f:
     #df1 = ((data['end_mileage'] - data['start_mileage']) * .05).to_frame('col')
     #result = df.groupby('Courses')['Fee','Discount'].aggregate('sum')
@@ -114,7 +113,8 @@ def reports():
 
 def main():
     
-    print('[1] Enter Trip\n[2] Reporting\n[3] Edit Data\n','*'*40, '\n')
+    print('[1] Enter Trip\n[2] Reporting\n[3] Edit Data\n','\nCtrl-C to exit\n\n')
+    print('*'*40, '\n')
     option = sanitised('Select Menu Option:', int, 1, 3)
     if option == 1:
         enter_trip()
@@ -133,7 +133,4 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print('\nGoodbye!')
-        quit()    
-    
-    
-   
+        quit()

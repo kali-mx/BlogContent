@@ -1,12 +1,13 @@
 #!/usr/bin/python3
-# a simple data entry program that calculates truck fuel tax by state, storing data to disk in comma separated values (csv)
+# a simple data entry program that calculates truck fuel tax by state, 
+#storing data to disk in comma separated values (csv)
+
 import subprocess,csv,os.path,os
-from functools import update_wrapper
-from typing import Any
+from art import tprint
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd
-from art import tprint
+
 
 subprocess.call('clear', shell=True)   ##clear screen##
 
@@ -16,6 +17,7 @@ mpg = fuel_cost = start_mileage = end_mileage = 0
 tprint('Trucker_Count',font='smooth1')
 print('authored by: Thomas Ahartz\n')
 print('*'*40, '\n')
+
 
 def sanitised(prompt, type_=None, min_=None, max_=None, range_=None):
     if min_ is not None and max_ is not None and max_ < min_:
@@ -53,14 +55,12 @@ def sanitised(prompt, type_=None, min_=None, max_=None, range_=None):
             return ui
 
 
-
-
 def enter_trip():
     while True:
         trip = 1
         truck_number = sanitised('Enter Truck #: ', int, 1, 99999)
-        fuel_cost = sanitised('Enter fuel:$ ', float, 1, 9999)
-        fuel_gallons = sanitised('Enter gallons: ', float, 1, 9999)
+        fuel_cost = sanitised('Enter fuel:$ ', float, 1, 999)
+        fuel_gallons = sanitised('Enter gallons: ', float, 1, 999)
         start_mileage = sanitised('Enter trip mileage start: ', float, 1, 5000000)
         end_mileage = sanitised('Enter trip mileage end: ', float, start_mileage, 5000000)
         state_of_travel = sanitised('State traveled: ', str)
@@ -133,4 +133,7 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print('\nGoodbye!')
-        quit()
+        quit()    
+    
+    
+   

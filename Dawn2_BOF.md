@@ -468,6 +468,11 @@ using pattern_offset, we find the offset at 13:
 
 ![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)
 
+## Finding the Jump Point
+!mona jmp -r esp
+
+
+
 ## reuse linux revshell code from previous step
 
 

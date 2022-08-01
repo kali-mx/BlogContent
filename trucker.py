@@ -84,7 +84,7 @@ def enter_trip():
                 f.close()
 
         rows = [str(truck_number), str(fuel_cost), str(fuel_gallons), str(start_mileage), str(end_mileage), str(trip_mileage), state_of_travel, str(tax_rate[0][1]), str(fuel_tax)] # data row
-        # writing to csv file  
+        # appending to csv file  
         with open('data.txt', 'a') as f:  
             # creating a csv writer object  
             csvwriter = csv.writer(f, delimiter = ',')  

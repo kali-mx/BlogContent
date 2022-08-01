@@ -1,6 +1,6 @@
 # Exploitation Guide for Dawn2
 ## Summary
-### This machine is running a couple of servers, vulnerable to a stack-based buffer overflow that leads to remote code execution. One of the servers is leaked from a website and grants the attacker local privileges on the target. The second server, running as root, is then leaked from the target itself and grants the attacker a root shell when exploited.
+#### This machine is running two servers, vulnerable to a stack-based buffer overflow that leads to remote code execution. One of the servers is leaked from a website and grants the attacker local privileges on the target. The second server, running as root, is then leaked from the target itself and grants the attacker a root shell when exploited.
 ## Enumeration
 
 ### Ports Open 80,1435,1985
@@ -55,8 +55,8 @@ p32 executable (console) Intel 80386, for MS Windows
 
 ```
 
-Transfer the dawn.exe file to my homelab Windows 10 vm with Immunity Debugger already installed.
-With python server running on my kali linux machine, complete the transfer by browsing to http://10.0.2.30:8000 on the Windows vm and select download.
+Transfer the dawn.exe file to a homelab Windows 10 vm with Immunity Debugger and mona installed.
+With python server running on a kali linux machine, complete the transfer by browsing to http://10.0.2.30:8000 on the Windows vm and select download.
 
 ```ruby
 
@@ -70,7 +70,9 @@ Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
 
 ```
 
-## Sending 500 As
+## 1) Sending 500 As
+
+#### With Immunity Debugger run as Administrator on the Windows vm, run the python script above, sending 500 byte-encoded A's and end it with a null-byte as instructed by the message we found earlier.
 
 ```python
 
@@ -100,14 +102,13 @@ if __name__ == "__main__":
     
 ```    
 
-With Immunity Debugger run as Administrator on the Windows vm, run the python script above, sending 500 byte-encoded A's 
-and end it with a null-byte as instructed by the message we found earlier. We show we can overwrite the Execution Instruction Pointer (EIP) on the Stack with A's (41414141).  Buffer Overflow vulnerability likely exists.
+ We show we can overwrite the Execution Instruction Pointer (EIP) on the Stack with A's (41414141).  Buffer Overflow vulnerability likely exists.
 
 ![test1](https://user-images.githubusercontent.com/76034874/181864956-0bf73890-b264-4522-89e8-fc1b6e5db3cf.png)
 
 
-## Finding the Offset
-The 2nd poc script will contain a unique repeating pattern of characters so we can easily find where in memory the program is crashing. Use pattern_create like this:
+## 2) Finding the Offset
+The 2nd poc script we send will contain a unique repeating pattern of characters so we can easily find where in memory the program is crashing. Use pattern_create like this:
 
 ``` bash
 ┌──(root💀kali)-[/home/kali/Documents/VULN/Dawn2]
@@ -145,7 +146,7 @@ if __name__ == "__main__":
     
 ```    
 
-Immunity Debugger shows the EIP is overwritten with 316A4130, hexadecimal for 0Aj1 in ascii. We can find the offset with the pattern_offset tool in mfsvenom:
+Immunity Debugger shows the EIP is overwritten with 316A4130, hexadecimal for 0Aj1 in ascii.` echo -e 316A4130 | xxd -r -p | rev` We can find the offset with the pattern_offset tool in mfsvenom:
 
 ![offet](https://user-images.githubusercontent.com/76034874/181865840-625f8d1e-71e0-4987-bdd6-19bd7ca81eea.png)
 
@@ -163,9 +164,9 @@ Put another way, the program crashes when we send 272 characters of data into th
 
 276
 ```
-
-Testing the offset calculation from above and confirming we still control the EIP:
-Send  A's equal to the offset, add four B's and end with a nullbyte for test3:
+## 3) Sending the Bs
+Testing the offset calculated from above and confirming we control the EIP:
+Send  A's equal to the offset, add four B's and end with a null-byte for test3:
 
 ```python
 #!/usr/bin/python3
@@ -201,7 +202,8 @@ The offset is correct because we have overwritten the EIP with B's (42424242)
 ![bbbb](https://user-images.githubusercontent.com/76034874/181866355-54749141-e981-4f9a-ad50-ba9b632c9e7b.png)
 
 
-## Testing "is there room for evil?  Our rev shell payload will be around 400 bytes.  Can we write this much to the buffer?
+## 4) Sending the Cs 
+Testing "is there room for evil?  Our rev shell payload will be around 400 bytes.  Can we write this much to the buffer without issue?
 We will send an additional byte-string of 400 Cs, representing our payload to confirm:
 
 
@@ -234,8 +236,8 @@ if __name__ == "__main__":
 
 ![cccc](https://user-images.githubusercontent.com/76034874/181866624-1e9edd0c-f52f-4303-92d4-49896367ae6f.png)
 
-## Testing for Bad Characters. 
-### The most common bad characters are x00,x0A,x0D, and xff due to the way the C language interprets these as 'special characters' instead of what we might intend.  We want to make sure msfvenom avoids using any we find while generating our payload, so it will run successfully.
+## 5) Testing for Bad Characters. 
+#### The most common bad characters are x00,x0A,x0D, and xff due to the way the C language interprets these as 'special characters' instead of what we might intend.  We want to make sure msfvenom avoids using any we find while generating our payload, so it will run successfully.
 
 We have a list saved and formated for python3 but they can also be found here: https://github.com/cytopia/badchars
 or simply outputed to screen with this quick script:
@@ -246,7 +248,7 @@ for x in range(1,256):
     print('\\x{:02x}'.format(x), end = '')
 ```    
 
-so this step will be send our As plus offset + Bs + badchars + nullbyte:
+so this step will send our As * offset + Bs + badchars + nullbyte:
 
 ```python
 
@@ -296,13 +298,13 @@ def main():
 if __name__ == "__main__":
     main()    
 ```
-We are checking that every hex value from x00-FF is in order without any errors.  To do this, right-click on the ESP and select Follow Dump from the menu.  Here it is good to go:
+We are checking that every hex value from x00-FF is in order without any errors.  To do this, right-click on the ESP and select **Follow Dump** from the menu.  Here it is good to go:
 
 
 ![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)
 
-## Finding the Jump Point
-### now we need to find an address in memory with the jmp esp instruction with no security features in place.  We can use this instruction to jump the program to an area of memory we control, which is pure evil (reverse shell).  We do this with mona, a tool in Immunity Debugger.  The syntax is !mona jmp -r esp
+## 6) Finding the Jump Point
+#### We need to find an address in memory with the jmp esp instruction with no security features in place. (False across the board).  We can use this instruction to jump the program to an area of memory we control, which is pure evil (reverse shell).  We do this with mona, a tool in Immunity Debugger.  The syntax is !mona jmp -r esp
 
 ![jmpesp](https://user-images.githubusercontent.com/76034874/181870587-18478525-0d60-4cd5-9e6b-81ed35f016b5.png)
 

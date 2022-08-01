@@ -233,7 +233,7 @@ def main():
 if __name__ == "__main__":
     main()    
 ```    
-
+Not only do we control the EIP with Bs, we have enough room for our payload, as shown by all the 43434343 (Cs) filling the memory locations right after it.
 ![cccc](https://user-images.githubusercontent.com/76034874/181866624-1e9edd0c-f52f-4303-92d4-49896367ae6f.png)
 
 ## 5) Testing for Bad Characters. 
@@ -304,8 +304,8 @@ We are checking that every hex value from x00-FF is in order without any errors.
 ![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)
 
 ## 6) Finding the Jump Point
-#### We need to find an address in memory with the jmp esp instruction with no security features in place. (False across the board).  We can use this instruction to jump the program to an area of memory we control, which is pure evil (reverse shell).  We do this with mona, a tool in Immunity Debugger.  The syntax is !mona jmp -r esp
-
+#### We need to find an address in memory with the jmp esp instruction with no security features in place. (False across the board).  We can use this instruction to jump the program to an area of memory we control, which is our reverse shellcode).  We do find with mona, a tool in Immunity Debugger.  The syntax is `!mona jmp -r esp`
+The output shows us a viable pointer location at 0x345964ba.  We can point our BOF to end up at this address, containing a jmp instruction    
 ![jmpesp](https://user-images.githubusercontent.com/76034874/181870587-18478525-0d60-4cd5-9e6b-81ed35f016b5.png)
 
 # Generating the reverse shell

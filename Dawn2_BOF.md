@@ -145,7 +145,7 @@ if __name__ == "__main__":
     
 ```    
 
-Immunity Debugger shows the EIP is overwritten with 316A4130, hexadecimal for 1jA0. We can find the offset with the pattern_offset tool in mfsvenom:
+Immunity Debugger shows the EIP is overwritten with 316A4130, hexadecimal for 0Aj1 in ascii. We can find the offset with the pattern_offset tool in mfsvenom:
 
 ![offet](https://user-images.githubusercontent.com/76034874/181865840-625f8d1e-71e0-4987-bdd6-19bd7ca81eea.png)
 
@@ -157,7 +157,7 @@ Immunity Debugger shows the EIP is overwritten with 316A4130, hexadecimal for 1j
 [*] Exact match at offset 272
 ```
 
-Put another way, the program crashed when the 272th character of our pattern entered the buffer. 
+Put another way, the program crashes when we send 272 characters of data into the buffer. 
 ```bash
 % echo -n 'Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1' |wc -c
 

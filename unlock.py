@@ -15,4 +15,4 @@ print("Unlock Codes:")
 
 for i in range(len(hexcode)):
     key = str(hexcode[i] ^ id).rjust(10,'0')
-    print(names[i] + "'s Key: ", key)
+    print(key[-1] + key[:-1], names[i])

@@ -14,4 +14,5 @@ print("Unlock Codes:")
 #rjust to create padding w/zeros for any key less than 10 digits,rotates last char to front
 
 for i in range(len(hexcode)):
-    key = str(hexcode[i] ^ id).rjust(10,'0'
+    key = str(hexcode[i] ^ id).rjust(10,'0')
+    print(names[i] + "'s Key: ", key)

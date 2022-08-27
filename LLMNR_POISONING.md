@@ -1,4 +1,4 @@
-# LLMNR
+# LLMNR (Link Local Multicast Name Resolution))
 #### LLMNR is a key feature in Active Directory used to hail other hosts on the network if DNS fails to do so. The DC sends out a broadcast asking any connected host to respond.  Any that do confirm the response by sending a username and NTLM password hash back.  Using Responder, a MITM sniffer, we can intercept this signal and attempt to crack the hash or reuse it in a login attempt aka 'passing the hash'.  We will explore both, as well as examples of how we could use responder during an engagement.
 
 
@@ -34,4 +34,18 @@ nth -t 'fcastle::MARVEL:b5767a2e087ea531:157C0B6B863C13119F038A5C01F702D7:010100
 ### using hashcat, we can see if we can crack this hash by running it against rockyou.txt for this demo.  In the real world, if this fails, we would use a more custom, bigger wordlist to make sure our weak password test is thorough and up to date.
 syntax: `hashcat -O -m 5600 hash /usr/share/wordlists/rockyou.txt`
 ![image](https://user-images.githubusercontent.com/76034874/186996929-a065c526-cf10-44ad-900e-7f4d5cfa1253.png)
+
+
+
+# SMB RELAY
+
+using nmap builtin script to search for smb status on port 445:
+syntax: `nmap --script=smb2-security-mode.nse -p445  10.0.2.0/24 | grep "smb2-security-mode" -A2 -B8`
+![image](https://user-images.githubusercontent.com/76034874/187007262-4d503d3c-80fa-4744-8a6f-5baab830b309.png)
+
+![image](https://user-images.githubusercontent.com/76034874/187007785-4e591c12-dfb8-4cea-bb3c-c09c4a7db798.png)
+
+
+login in to Spiderman machine and create an event:
+try to access a share: 10.0.2.30
 

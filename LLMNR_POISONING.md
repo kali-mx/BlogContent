@@ -49,3 +49,4 @@ syntax: `nmap --script=smb2-security-mode.nse -p445  10.0.2.0/24 | grep "smb2-se
 login in to Spiderman machine and create an event:
 try to access a share: 10.0.2.30
 
+![image](https://user-images.githubusercontent.com/76034874/187008490-680f5243-efc4-4a78-b269-2558b2188c1b.png)

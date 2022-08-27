@@ -62,5 +62,6 @@ and we open up to a shell, type 'help' to see a list of commands.  We can upload
 
 
 ![image](https://user-images.githubusercontent.com/76034874/187009309-f8dca5d0-8da0-4e4f-a705-6d289d1bae30.png)
+![image](https://user-images.githubusercontent.com/76034874/187009336-bf0f7849-c3e3-4fa8-a88a-d0e40abb8f4b.png)
 
 

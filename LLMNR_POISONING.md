@@ -1,9 +1,10 @@
 # LLMNR (Link Local Multicast Name Resolution))
 #### LLMNR is a key feature in Active Directory used to hail other hosts on the network if DNS fails to do so. The DC sends out a broadcast asking any connected host to respond.  Any that do confirm the response by sending a username and NTLM password hash back.  Using Responder, a MITM sniffer, we can intercept this signal and attempt to crack the hash or reuse it in a login attempt aka 'passing the hash'.  We will explore both, as well as examples of how we could use responder during an engagement.
 
+####  So how do we use this in the real world on an engagement?  I mean, users aren't logging into thier shares by typing in our eth0, right?  Correct but they may make a typo like \\shaere01\Documents instead of \\share01\Documents.  That's all it takes for LLMNR to take over and Responder is there to intercept.  Another scenario:  A user runs a login script
 
 #### Start Responder on your eth0
-#### We can find our etho with the `ip a` command:
+#### We can find our eth0 with the `ip a` command:
 ![image](https://user-images.githubusercontent.com/76034874/186995673-2c0efa17-d788-4a41-b39a-6704c839518a.png)
 
 

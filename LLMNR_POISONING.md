@@ -67,7 +67,7 @@ syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 
 ## LET'S TALK REMEDIATION
 
-### Here is the current guidance on patchin this security flaw:
+### Here is the current guidance on patching this security flaw:
 
 > #### Enable and Require SMB Signing on all devices
 >	- Pro: Stops the attack

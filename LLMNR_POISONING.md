@@ -71,15 +71,15 @@ syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 
 #### Remediations and Defenses:
 
-#### Enable SMB Signing on all devices
-	* Pro: Stops the attack
-	* Con: Slows file copying down by 15%
-#### Disable NTLM authentication on network
-	* Pro: Stops the attack
-	* Con: if Kerberos stops working, Windows defaults back to NTLM
-#### Account tiering
-	* Pro: Limits domain admins to specific tasks
-	* Con: Enforcing policy may be difficult
-#### Local admin restriction
-	* Pro: prevents most lateral movement
-	* Con: increase in service desk tickets
+> #### Enable SMB Signing on all devices
+>	- Pro: Stops the attack
+>	- Con: Slows file copying down by 15%
+> #### Disable NTLM authentication on network
+>	- Pro: Stops the attack
+>	- Con: if Kerberos stops working, Windows defaults back to NTLM
+> #### Account tiering
+>	- Pro: Limits domain admins to specific tasks
+>	- Con: Enforcing policy may be difficult
+> #### Local admin restriction
+>	- Pro: prevents most lateral movement
+>	- Con: increase in service desk tickets

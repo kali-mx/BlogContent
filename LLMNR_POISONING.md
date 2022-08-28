@@ -13,7 +13,7 @@
 ![image](https://user-images.githubusercontent.com/76034874/186995327-2bf3e6da-c1a8-448f-84b2-d92a052d132a.png)
 
 #### Simulate a user login by logging into a mistyped share on your target Windows machine:
-
+![2022-08-27 23_08_22-File Explorer](https://user-images.githubusercontent.com/76034874/187060594-9c11fcc1-a4b8-40e7-9104-f4aff787346a.png)
 
 
 #### and shortly responder intercepts a response:
@@ -62,4 +62,5 @@ and we open up to a shell, type 'help' to see a list of commands.  We can upload
 ![image](https://user-images.githubusercontent.com/76034874/187009336-bf0f7849-c3e3-4fa8-a88a-d0e40abb8f4b.png)
 
 ####  So how do we use this in the real world on an engagement?  I mean, users aren't logging into thier shares by typing in our eth0, right?  True, but in a fast-paced, large organization with hundreds of employees, someone is likely to make a typo like \\\shaere01\Documents\ instead of \\\share01\Documents\\.  That's all it takes for LLMNR to step in and Responder is there to intercept.  Another scenario:  A user runs a stale login script that points to a share that no longer exists or has moved.  This will trigger the same DNS failure with LLMNR as AD's default next step.  Best practice is to run Responder in the background at the start of the business day and right after lunch when most users are signing in. 
+
 

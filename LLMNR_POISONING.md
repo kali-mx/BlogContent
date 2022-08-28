@@ -1,5 +1,5 @@
 # LLMNR POISONING
-#### LLMNR (Link Local Multicast Name Resolution) is a key feature enabled by default in Active Directory, used to hail other clients on the network if DNS fails to do so. The Domain Controller (DC) sends out a broadcast asking any connected client to respond to the share request.  Responder, a multi-function MITM sniffer, will answer and in the exhange the username and NTLM password hash is broadcast.  Responder will capture this for us and we can attempt to crack the hash or reuse it in a login attempt aka 'pass the hash'.  We will explore both, as well as examples of how we could use responder during an engagement.
+#### LLMNR (Link Local Multicast Name Resolution) is a key feature enabled by default in Active Directory, used to hail other clients on the network if DNS fails to do so. The Domain Controller (DC) sends out a broadcast asking any connected client to respond to the share request.  Responder, a multi-function MITM sniffer, will masquerade as this share, answer back, and in the exhange the username and NTLM password hash is broadcast.  Responder will capture this for us and we can attempt to crack the hash or reuse it in a login attempt aka 'pass the hash'.  We will explore both, as well as examples of how we could use responder during an engagement.
 
 
 #### Start Responder on your eth0
@@ -35,7 +35,9 @@ syntax: `hashcat -O -m 5600 hash /usr/share/wordlists/rockyou.txt`
 
 
 # SMB RELAY
-
+### SMB Relay Requirements: (aka "Pass the Hash")
+1. SMB signing must be disabled (not required) on the target
+2. relayed user hash must be admin on that machine
 ####  
 Using nmap's builtin script to search for smb status on port 445:
 syntax: `nmap --script=smb2-security-mode.nse -p445  10.0.2.0/24 | grep "smb2-security-mode" -A2 -B8`
@@ -63,5 +65,21 @@ syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 
 ####  So how do we use this in the real world on an engagement?  I mean, users aren't logging into their shares by typing in our eth0, right?  True, but in a fast-paced, large organization with hundreds of employees, someone is likely to make a typo like \\\shaere01\Documents\ instead of \\\share01\Documents\\.  That's all it takes for LLMNR to step in and Responder is there to intercept.  Another scenario:  A user runs a stale login script that points to a share that no longer exists or has moved.  This will trigger the same DNS failure with LLMNR as AD's default fallback.  A good practice is to run Responder in the background at the start of the business day and right after lunch when most users are signing in, during the enumeration stage of the engagement.  Just like fishing, get that pole in the water early, check back often, you just may land an easy win!
 
+## LET'S TALK REMEDIATION
 
+### Here is the current guidance on plugging this security flaw:
 
+#### Remediations and Defenses:
+
+#### Enable SMB Signing on all devices
+	* Pro: Stops the attack
+	* Con: Slows file copying down by 15%
+#### Disable NTLM authentication on network
+	* Pro: Stops the attack
+	* Con: if Kerberos stops working, Windows defaults back to NTLM
+#### Account tiering
+	* Pro: Limits domain admins to specific tasks
+	* Con: Enforcing policy may be difficult
+#### Local admin restriction
+	* Pro: prevents most lateral movement
+	* Con: increase in service desk tickets

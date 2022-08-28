@@ -39,11 +39,10 @@ syntax: `hashcat -O -m 5600 hash /usr/share/wordlists/rockyou.txt`
 ####  
 Using nmap's builtin script to search for smb status on port 445:
 syntax: `nmap --script=smb2-security-mode.nse -p445  10.0.2.0/24 | grep "smb2-security-mode" -A2 -B8`
-Note: We are looking for SMB signing not required for this to work.  Also, note this will still work between clients even though the DC has been "locked down" with SMB signing enabled and required.
+Note: We are looking for SMB signing _not required_ for this to work.  Also, note this will still work between clients even though the DC has been "locked down" with SMB signing _enabled and required_.
+
 <img width="700" height="500" alt="image4" src="https://user-images.githubusercontent.com/76034874/187007262-4d503d3c-80fa-4744-8a6f-5baab830b309.png">
-
 ![image](https://user-images.githubusercontent.com/76034874/187007785-4e591c12-dfb8-4cea-bb3c-c09c4a7db798.png)
-
 
 #### Login in to the Windows machine and create an event:
 #### try to access a share: 10.0.2.30
@@ -62,7 +61,7 @@ syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 ![image](https://user-images.githubusercontent.com/76034874/187009309-f8dca5d0-8da0-4e4f-a705-6d289d1bae30.png)
 <img width = "774" alt="image2" src="https://user-images.githubusercontent.com/76034874/187009336-bf0f7849-c3e3-4fa8-a88a-d0e40abb8f4b.png">
 
-####  So how do we use this in the real world on an engagement?  I mean, users aren't logging into thier shares by typing in our eth0, right?  True, but in a fast-paced, large organization with hundreds of employees, someone is likely to make a typo like \\\shaere01\Documents\ instead of \\\share01\Documents\\.  That's all it takes for LLMNR to step in and Responder is there to intercept.  Another scenario:  A user runs a stale login script that points to a share that no longer exists or has moved.  This will trigger the same DNS failure with LLMNR as AD's default fallback.  A good practice is to run Responder in the background at the start of the business day and right after lunch when most users are signing in, during the enumeration stage of the engagement.  Just like fishing, get that pole in the water early, check back often, you just may land an easy win!
+####  So how do we use this in the real world on an engagement?  I mean, users aren't logging into their shares by typing in our eth0, right?  True, but in a fast-paced, large organization with hundreds of employees, someone is likely to make a typo like \\\shaere01\Documents\ instead of \\\share01\Documents\\.  That's all it takes for LLMNR to step in and Responder is there to intercept.  Another scenario:  A user runs a stale login script that points to a share that no longer exists or has moved.  This will trigger the same DNS failure with LLMNR as AD's default fallback.  A good practice is to run Responder in the background at the start of the business day and right after lunch when most users are signing in, during the enumeration stage of the engagement.  Just like fishing, get that pole in the water early, check back often, you just may land an easy win!
 
 
 

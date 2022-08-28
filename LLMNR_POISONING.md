@@ -54,9 +54,7 @@ Interactive Mode:
 syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 ![image](https://user-images.githubusercontent.com/76034874/187008783-7a4a8830-4796-495e-b1a1-8efafd69e439.png)
 
-#### Now we start a netcat listener in another terminal on our attack box at 127.0.0.1 11002
-#### and we open up to a shell, type 'help' to see a list of commands.  We can upload or download files with `get` and `put`.  
-#### We could upload our own reverse shell or run any windows command in the ntlmrelay command line.
+#### Now we start a netcat listener in another terminal on our attack box at 127.0.0.1 11002 and we open up to a shell, type 'help' to see a list of commands.  We can upload or download files with `get` and `put`.  We could upload our own reverse shell or run any windows command in the ntlmrelay command line.
 
 
 ![image](https://user-images.githubusercontent.com/76034874/187009309-f8dca5d0-8da0-4e4f-a705-6d289d1bae30.png)

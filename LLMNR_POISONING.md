@@ -16,7 +16,7 @@
 ![2022-08-27 23_08_22-File Explorer](https://user-images.githubusercontent.com/76034874/187060594-9c11fcc1-a4b8-40e7-9104-f4aff787346a.png)
 
 
-### and shortly responder intercepts a response:
+### and shortly responder intercepts a response including the username and password hash:
 ![image](https://user-images.githubusercontent.com/76034874/186996305-77a429b1-3581-4f19-bb16-8e0246bcbaf8.png)
 
 ### One of my favorite hash identifiers is nth (apt install name-that-hash). Bonus: it tells us the mode to use in hashcat.

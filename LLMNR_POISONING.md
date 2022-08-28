@@ -44,10 +44,11 @@ syntax: `nmap --script=smb2-security-mode.nse -p445  10.0.2.0/24 | grep "smb2-se
 Note: We are looking for SMB signing _not required_ for this to work.  Also, note this will still work between clients even though the DC has been "locked down" with SMB signing _enabled and required_.
 
 <img width="700" height="500" alt="image4" src="https://user-images.githubusercontent.com/76034874/187007262-4d503d3c-80fa-4744-8a6f-5baab830b309.png">
-![image](https://user-images.githubusercontent.com/76034874/187007785-4e591c12-dfb8-4cea-bb3c-c09c4a7db798.png)
 
-#### Login in to the Windows machine and create an event:
-#### try to access a share: 10.0.2.30
+
+#### Login in to the Windows machine and try to access a share we know is invalid on the network, our eth0: \\\10.0.2.30
+<img width="807" alt="Screen Shot 2022-08-28 at 4 50 59 PM" src="https://user-images.githubusercontent.com/76034874/187099849-3124a8c9-e6f5-4a02-8f6b-cd5920650f42.png">
+
 #### syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
 #### We can see the hashes come through. We can either crack these or relay them.  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program (so we could disable it) or another client on the network.
 ![image](https://user-images.githubusercontent.com/76034874/187008490-680f5243-efc4-4a78-b269-2558b2188c1b.png)

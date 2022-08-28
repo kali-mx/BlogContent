@@ -12,7 +12,7 @@
 <img width="774" alt="image1" src="https://user-images.githubusercontent.com/76034874/186995327-2bf3e6da-c1a8-448f-84b2-d92a052d132a.png">
 
 ### Simulate a user login by logging into a mistyped share on your target Windows machine:
-![2022-08-27 23_08_22-File Explorer](https://user-images.githubusercontent.com/76034874/187060594-9c11fcc1-a4b8-40e7-9104-f4aff787346a.png)
+<img width="700" alt="image3" src="https://user-images.githubusercontent.com/76034874/187060594-9c11fcc1-a4b8-40e7-9104-f4aff787346a.png">
 
 
 ### and shortly responder intercepts a response including the username and password hash:

@@ -81,3 +81,6 @@ syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 > #### Local admin restriction
 >	- Pro: prevents most lateral movement
 >	- Con: increase in service desk tickets
+
+
+##### credits: Special thanks to https://academy.tcm-sec.com/ Especially the AD Lab setup tutorial in the PEH course.

@@ -58,6 +58,16 @@ The targets.txt will contain the ip's of the clients we just identified with nma
 #### We can see the hashes come through. We can either crack these or relay them.  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program (so we could disable it) or another client on the network.
 ![image](https://user-images.githubusercontent.com/76034874/187008490-680f5243-efc4-4a78-b269-2558b2188c1b.png)
 
+### Cracking SAM hashes. SAM hashes are NTLM hashes so will require a differnt mode in hashcat. 1st save the hashes to a file `nano hashes.txt`
+![image](https://user-images.githubusercontent.com/76034874/187314134-530e8d81-51a2-487b-9f3d-44c997c963da.png)
+
+### Syntax: hashcat -O -m 1000 hashes.txt /usr/share/wordlists/rockyou.txt
+![image](https://user-images.githubusercontent.com/76034874/187315305-897906ec-2466-4551-8f59-70cc4ef482eb.png)
+
+###Then list out any cracked passwords:
+Syntax: `hashcat -m1000 --show --usernames hashes.txt`
+![image](https://user-images.githubusercontent.com/76034874/187315627-39471cf4-5393-4dfe-8a11-69d5c5fb3fd0.png)
+
 
 #### Interactive Mode:  Another nice feature of ntlmrelayx we can leverage is its ability to create an interactive shell:
 syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`

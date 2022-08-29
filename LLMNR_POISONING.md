@@ -15,7 +15,7 @@
 <img width="700" alt="image3" src="https://user-images.githubusercontent.com/76034874/187060594-9c11fcc1-a4b8-40e7-9104-f4aff787346a.png">
 
 
-### and very quickly responder intercepts a response including the username and password hash:
+### Responder intercepts a response including the username and password hash:
 ![image](https://user-images.githubusercontent.com/76034874/186996305-77a429b1-3581-4f19-bb16-8e0246bcbaf8.png)
 
 ### My go-to hash identifier tool is `nth` (apt install name-that-hash). Bonus: it tells us the mode to use in hashcat and JTR.
@@ -29,7 +29,7 @@ nth -t 'fcastle::MARVEL:b5767a2e087ea531:157C0B6B863C13119F038A5C01F702D7:010100
 
 ### Now we can copy-paste the entire hash in a file on our attack machine via `nano hash.txt`
 We can attempt to crack this hash using hashcat by running it against rockyou.txt.  In the real world, if this fails, we would use a more custom, bigger wordlist to make sure our weak password test is current and thorough.
-syntax: `hashcat -O -m 5600 hash /usr/share/wordlists/rockyou.txt`
+syntax: `hashcat -O -m 5600 hash.txt /usr/share/wordlists/rockyou.txt`
 ![image](https://user-images.githubusercontent.com/76034874/186996929-a065c526-cf10-44ad-900e-7f4d5cfa1253.png)
 
 

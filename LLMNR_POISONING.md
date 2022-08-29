@@ -49,13 +49,13 @@ Note: We are looking for SMB signing _not required_ for this to work.  Also, not
 ![image](https://user-images.githubusercontent.com/76034874/187309572-e8832984-0a21-45b4-b1e9-cacd5e2d6ed8.png)
 
 
-#### Restart Responder, and in an new terminal start a tool called `ntlmrelayx` on our attackbox:
+#### Restart Responder, and in a new terminal start a tool called `ntlmrelayx` on our attackbox:
 Syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
 The targets.txt will contain the ip's of the clients we just identified with nmap that have SMB signing disabled.
 #### Login in to the Windows machine and try to access a share we know is invalid on the network like our eth0: \\\10.0.2.30
 <img width="807" alt="Screen Shot 2022-08-28 at 4 50 59 PM" src="https://user-images.githubusercontent.com/76034874/187099849-3124a8c9-e6f5-4a02-8f6b-cd5920650f42.png">
 
-#### We can see the hashes come through. We can either crack these or attemp to relay them (another lesson).  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program (so we could disable it) or another client on the network.
+#### We can see the hashes come through. We can either crack these or attempt to relay them (another lesson).  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program (so we could disable it) or another client on the network.
 ![image](https://user-images.githubusercontent.com/76034874/187008490-680f5243-efc4-4a78-b269-2558b2188c1b.png)
 
 ### Cracking SAM hashes. SAM hashes are NTLM hashes so will require a different mode in hashcat. 1st save the hashes to a file `nano hashes.txt`
@@ -70,6 +70,7 @@ Syntax: `hashcat -m1000 --show --usernames hashes.txt`
 
 ### Interactive Mode:  Another nice feature of ntlmrelayx we can leverage is its ability to create an interactive shell:
 syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
+
 ![image](https://user-images.githubusercontent.com/76034874/187008783-7a4a8830-4796-495e-b1a1-8efafd69e439.png)
 
 #### Now we start a netcat listener in another terminal on our attack box at 127.0.0.1 11002 and we open up to a shell. Type 'help' to see a list of commands.  We can upload or download files with `get` and `put`.  We could run most windows commands in the ntlmrelay command line or upload our own reverse shell. For example:

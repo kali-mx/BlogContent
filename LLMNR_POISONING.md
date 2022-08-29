@@ -1,8 +1,8 @@
 # LLMNR POISONING
-#### LLMNR (Link Local Multicast Name Resolution) is a key feature enabled by default in Active Directory, used to hail other clients on the network if DNS fails to do so. The Domain Controller (DC) sends out a broadcast asking any connected client to respond to the share request.  Responder, a multi-function MITM sniffer, will masquerade as this share, answer back, and in the exhange the username and NTLM password hash is broadcast.  Responder will capture this for us and we can attempt to crack the hash or reuse it in a login attempt aka 'pass the hash'.  We will explore both, as well as examples of how we could use responder during an engagement.
+#### LLMNR (Link Local Multicast Name Resolution) is a key feature enabled by default in Active Directory, used to hail other clients on the network if DNS fails to do so. The client sends out a broadcast asking any other connected clients to respond to the share request.  Responder, a multi-function MITM sniffer, will masquerade as this share, answer back, and in the process the username and NTLM password hash is exchanged.  Responder will capture this for us and we can attempt to crack the hash or reuse it in a SMB relay attack aka 'pass the hash'.  We will explore both, as well as examples of how we could use Responder during an engagement.
 
-
-#### Start Responder on your eth0
+#### This demo was conducted in an AD Home Lab environment inside VirtualBox, using the free MS Evaluation Versions of Win10 Enterprise and Win Server2019.
+#### With the DC and two Enterprise clients already running in the home lab, from your kali attack box also running inside VirtualBox on the same NAT Network, start Responder on your eth0
 #### We can find our eth0 with the `ip a` command:
 <img width="700" alt="image5" src="https://user-images.githubusercontent.com/76034874/186995673-2c0efa17-d788-4a41-b39a-6704c839518a.png">
 
@@ -47,7 +47,7 @@ Note: We are looking for SMB signing _not required_ for this to work.  Also, not
 
 #### Let's start a tool called `ntlmrelayx` on our attackbox 
 Syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
-The targets.txt will contain the ip's of the clients we served earlier that have SMB signing disabled.
+The targets.txt will contain the ip's of the clients we just identified with nmap that have SMB signing disabled.
 #### Login in to the Windows machine and try to access a share we know is invalid on the network, our eth0: \\\10.0.2.30
 <img width="807" alt="Screen Shot 2022-08-28 at 4 50 59 PM" src="https://user-images.githubusercontent.com/76034874/187099849-3124a8c9-e6f5-4a02-8f6b-cd5920650f42.png">
 
@@ -92,7 +92,7 @@ Syntax: `ntlmrelayx.py -tf targets.txt -smb2support -c "whoami"`
 >	- Con: Enforcing policy may be difficult
 > #### Local admin restriction
 >	- Pro: prevents most lateral movement
->	- Con: increase in service desk tickets
+>	- Con: increase in service desk tickets likely
 
 
 ##### credits: Special thanks to https://academy.tcm-sec.com/ Especially the AD Lab setup tutorial in the PEH course.

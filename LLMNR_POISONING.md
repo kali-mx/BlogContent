@@ -45,7 +45,10 @@ Note: We are looking for SMB signing _not required_ for this to work.  Also, not
 
 <img width="700" height="500" alt="image4" src="https://user-images.githubusercontent.com/76034874/187007262-4d503d3c-80fa-4744-8a6f-5baab830b309.png">
 
-#### Let's start a tool called `ntlmrelayx` on our attackbox 
+#### We need to turn off SMB and HTTP in Responder's config, so `nano /etc/responder/Responder.conf` and make those edits:
+
+
+#### With Responder still running, in an new terminal start a tool called `ntlmrelayx` on our attackbox:
 Syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
 The targets.txt will contain the ip's of the clients we just identified with nmap that have SMB signing disabled.
 #### Login in to the Windows machine and try to access a share we know is invalid on the network, our eth0: \\\10.0.2.30

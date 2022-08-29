@@ -47,7 +47,7 @@ Note: We are looking for SMB signing _not required_ for this to work.  Also, not
 
 #### Let's start a tool called `ntlmrelayx` on our attackbox 
 Syntax: `ntlmrelayx.py -tf targets.txt -smb2support`
-
+The targets.txt will contain the ip's of the clients we served earlier that have SMB signing disabled.
 #### Login in to the Windows machine and try to access a share we know is invalid on the network, our eth0: \\\10.0.2.30
 <img width="807" alt="Screen Shot 2022-08-28 at 4 50 59 PM" src="https://user-images.githubusercontent.com/76034874/187099849-3124a8c9-e6f5-4a02-8f6b-cd5920650f42.png">
 

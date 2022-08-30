@@ -65,6 +65,7 @@ The targets.txt will contain the ip's of the clients we just identified with nma
 ### Syntax: `hashcat -O -m 1000 hashes.txt /usr/share/wordlists/rockyou.txt`
 ### Then list out any cracked passwords:
 Syntax: `hashcat -m1000 --show --usernames hashes.txt`
+
 ![image](https://user-images.githubusercontent.com/76034874/187315305-897906ec-2466-4551-8f59-70cc4ef482eb.png)
 
 
@@ -97,7 +98,7 @@ Syntax: `ntlmrelayx.py -tf targets.txt -smb2support -c "whoami"`
 
 > #### Enable and Require SMB Signing on all devices
 >	- Pro: Stops the attack
->	- Con: Slows file copying down by 15%
+>	- Con: Slows file copying speed down by 15%
 > #### Disable NTLM authentication on network
 >	- Pro: Stops the attack
 >	- Con: if Kerberos stops working, Windows defaults back to NTLM

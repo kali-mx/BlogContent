@@ -2,6 +2,10 @@
 #!/usr/bin/python3
 #How would you rank in another country, say Russsia, Germany or Antartica??
 #Let's find out!!
+### Author: Thomas Max Ahartz
+### Title: Rankor
+### Created: 10.01.22
+
 
 import requests, json, os
 

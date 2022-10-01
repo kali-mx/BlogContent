@@ -5,7 +5,7 @@
 ### Author: Thomas Max Ahartz
 ### Title: Rankor
 ### Created: 10.01.22
-
+### Credit: tryhackme.com, an amazing cybersecurity learning platform!
 
 import requests, json, os
 

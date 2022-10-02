@@ -9,7 +9,7 @@
 
 import requests, json, os
 
-isoCountries = {
+Countries = {
     'AF': 'Afghanistan',
     'AX': 'Aland\x20Islands',
     'AL': 'Albania',
@@ -256,13 +256,13 @@ os.system('clear')
 import pyfiglet
 banner= pyfiglet.figlet_format("Rankor")
 print(banner)
-num_of_countries = (len(isoCountries))
+num_of_countries = (len(Countries))
 
 MYpoints = int(input('How many points do you have? '))
 
 while True:
     country = input('What country would you like to compare ranks? Enter country code: ')
-    if country.upper() in isoCountries:
+    if country.upper() in Countries:
         print('Coming right up!\n')
         break 
     else:
@@ -294,13 +294,13 @@ while i < list_length:
         i+=1
 
 if MYpoints > rank_list[0]:
-    print('\n','You would be ranked #1 in', isoCountries[country.upper()].upper())           
+    print('\n','You would be ranked #1 in', Countries[country.upper()].upper())           
 elif sorry == False:
-    print('\n','You would be ranked', rank_index+1, 'in', isoCountries[country.upper()])       
+    print('\n','You would be ranked', rank_index+1, 'in', Countries[country.upper()])       
 
 
 newdict = {}
-for code,ctry in isoCountries.items():  #key,value: example us,UNITED STATES
+for code,ctry in Countries.items():  #key,value: example us,UNITED STATES
     i=0
     url = 'https://tryhackme.com/api/leaderboards?country=' + code.lower()
     #print(url)

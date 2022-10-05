@@ -269,7 +269,6 @@ while True:
         print(f'{country} code not found. Typo?')   
 i=0
 url = 'https://tryhackme.com/api/leaderboards?country=' + country.lower()
-#print(url)
 r = requests.get(url)
 myJson = r.json() 
 rank_list = []
@@ -303,7 +302,6 @@ newdict = {}
 for code,ctry in Countries.items():  #key,value: example us,UNITED STATES
     i=0
     url = 'https://tryhackme.com/api/leaderboards?country=' + code.lower()
-    #print(url)
     r = requests.get(url)
     myJson = r.json() 
     rank_list = []
@@ -311,7 +309,6 @@ for code,ctry in Countries.items():  #key,value: example us,UNITED STATES
         while True: #loop trys to creates a Top50 list by country
             points = myJson['ranks'][i]['points']
             rank_list.append(points)
-            #print(i+1,points)
             i+=1
     except IndexError:
         print('')
@@ -321,14 +318,12 @@ for code,ctry in Countries.items():  #key,value: example us,UNITED STATES
     list_length = len(rank_list)
     while j < list_length:
         if MYpoints < rank_list[list_length-1]:
-            #print('\n','Sorry, you are not in the Top', list_length, ' in ', ctry.upper())
             sorry = True;break
         elif MYpoints < rank_list[j]:
-            rank_index +=1 #count how many I beat
+            rank_index +=1 #find your place
         j+=1
 
     if MYpoints > rank_list[0]:
-        #print(MYpoints,rank_list[0])
         print('\n','You would be ranked #1 in', ctry.upper())   
         newdict[ctry] = 1
         print(newdict)
@@ -337,8 +332,6 @@ for code,ctry in Countries.items():  #key,value: example us,UNITED STATES
         newdict[ctry] = rank_index+1
 
 print('\n'+'*'*45+'\n')        
-# pp = pprint.PrettyPrinter(depth=4)
-# pp.pprint(newdict)
 print("Country                        Your Ranking",'\n')
 for c in newdict:
     #print("{ctry}: {rank}".format(ctry=c, rank=newdict[c]))

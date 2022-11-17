@@ -1,6 +1,6 @@
-# Now Available- New Install script to check for & install when needed, all dependencies automatically to get you up and running fast! Tested on Kali 2022.3
+# Now Available- New Install script to check and install if needed, all dependencies automatically to spin you up fast! Tested on Kali 2022.3
 
 
 
-https://user-images.githubusercontent.com/76034874/202294109-fbb022bb-6a16-4e95-a9bb-116a14f39d86.mp4
+https://user-images.githubusercontent.com/76034874/202392985-f20e6c06-4996-48c1-8b56-410a09d94f6d.mp4
 

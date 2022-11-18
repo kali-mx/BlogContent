@@ -1,4 +1,4 @@
-# Now Available- New Install script to check and install if needed, all dependencies automatically to spin you up fast! Tested on Kali 2022.3
+# Now Available- New Install script to check and install if needed, all dependencies automatically to spin you up fast! Tested on fresh install of Kali 2022.3 from kali.org
 
 
 

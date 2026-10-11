@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal Drop: reading the breach from logs to flag</title>
+  <meta name="description" content="A log-analysis and EDR-triage walkthrough of the TryHackMe Portal Drop room: brute force, webshell upload, double-base64 command channel, and lateral movement.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Portal Drop: reading the breach from logs to flag</h1>
+  <p class="dek">A CRM portal got breached. All you start with is a raw access log and an EDR console, no hints, no pre-built story. Here's how I reconstructed the whole attack, step by step, and why each move made sense.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Portal Drop</span>
+    <span class="pill">Category: DFIR / Log Analysis</span>
+    <span class="pill">Tools: grep, awk, base64, EDR console</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a WAF alert fires on <code>crm.trypatchme.thm</code>, a web scan, then a suspicious file upload. The job: pull the truth out of the web access log and the EDR console, and decide if it's a false positive or a real breach.</p>
+    <p>Spoiler: it's real. Here's the trail.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Spot the brute force</div>
+          <p>The access log is plain Apache combined format: IP, timestamp, request, status code, user-agent. The fastest way to find a brute force in a pile of lines like this is to stop reading them one at a time and instead group by <em>who</em> and <em>what happened</em>:</p>
+          <pre><code><span class="cm"># which IP keeps hitting login.php, and with what result?</span>
+grep <span class="ca">"login.php"</span> access.log | awk <span class="ca">'{print $1, $9}'</span> | sort | uniq -c | sort -rn</code></pre>
+          <p>One IP jumped out immediately: <code>34.67.91.83</code>, with 21 lines of <code>401</code> followed by a single <code>200</code>. Twenty-one failures then one success, all from the same source, is about as clean a brute-force signature as log data ever gives you.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Counting beats reading. A brute force is a pattern (volume plus failure ratio), not a single suspicious line. <code>uniq -c</code> turns thousands of rows into a handful you can eyeball.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Count every login, not just the attacker's</div>
+          <p>Separate question, same file: the room wants the site-wide totals, not just one IP's attempts. Every real user's logins count too.</p>
+          <pre><code>grep <span class="ca">"login.php"</span> access.log | awk <span class="ca">'$9==200'</span> | wc -l   <span class="cm"># successful</span>
+grep <span class="ca">"login.php"</span> access.log | awk <span class="ca">'$9==401'</span> | wc -l   <span class="cm"># failed</span></code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>It's easy to anchor on "the attacker" and forget the question asked for the whole dataset. Always re-read exactly what's being asked before you scope your grep.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Watch behavior change after login</div>
+          <p>Filtering the whole log down to just <code>34.67.91.83</code> laid out the next moves in order. After the successful login: a couple of recon requests, then a <code>POST /CRM/portal/upload.php</code>, but logged under a different user-agent, <code>python-requests/2.31.0</code>, instead of the brute-forcer's <code>PF-Scanner/1.0</code>.</p>
+          <p>Right after, a new file appeared under <code>/CRM/portal/uploads/</code>: <code>invoice.php</code>, a name picked to blend into a CRM's normal traffic.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A user-agent switch mid-session is a strong tell. It usually means the attacker swapped from an off-the-shelf scanner to a hand-written script for the exploitation step, which is exactly what let the EDR (and me) separate scanning from attacking.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Crack the webshell's command channel</div>
+          <p>Every call to <code>invoice.php</code> carried a <code>q=</code> parameter and an auth token. The <code>q</code> value didn't decode cleanly on the first pass, because it was base64 twice:</p>
+          <pre><code><span class="cm">$ </span>echo <span class="ca">"ZDJodllXMXA"</span> | base64 -d
+d2hvYW1p          <span class="cm"># still base64, decode again</span>
+
+<span class="cm">$ </span>echo <span class="ca">"d2hvYW1p"</span> | base64 -d
+whoami            <span class="cm"># the actual command</span></code></pre>
+          <p>The second request's <code>q</code> unwound the same way, two layers deep, into a reverse shell one-liner reaching out to the attacker's box.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Double (or N-layer) encoding is a cheap evasion trick against anyone just grepping for plaintext commands in a log. The fix is simple once you notice it. If a decoded string still looks like base64 (letters and digits, no spaces, no obvious words), decode it again.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Switch from logs to telemetry</div>
+          <p>Logs tell you what hit the server. They can't tell you what ran on it, or as whom. For that I moved to the EDR console and walked the process tree on the infected host:</p>
+          <pre><code>systemd
+  &rarr; apache2 (master)
+    &rarr; apache2 (worker)
+      &rarr; php-fpm (master)
+        &rarr; php-fpm (worker)   <span class="cm"># image: /usr/sbin/php-fpm7.4, user: www-data</span></code></pre>
+          <p>That worker process is what actually executes anything the webshell asks for. The EDR confirmed it runs as the unprivileged web user, <code>www-data</code>, exactly where you'd expect a PHP app to run.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A process tree answers "who's the parent of what" in one glance. It's the fastest way to prove a request-to-process link that a log file can only imply.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Let the EDR's own IOCs confirm the read</div>
+          <p>The same detection's IOC/Indicators tab listed the file path and process image as independently-flagged indicators. The EDR's detection engine had tagged the exact same two artifacts I'd just traced by hand from the log and the process tree.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Triangulating matters. When the access log, the process tree, and the EDR's own IOC list all point to the same file and process, you can be confident it's not a coincidence or a logging artifact.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Name the technique</div>
+          <p>Dropping a script into a web-accessible folder so you can keep running commands through it later is textbook MITRE ATT&amp;CK <strong>T1505.003: Server Software Component: Web Shell</strong>, filed under the Persistence tactic.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Mapping an action to an ATT&amp;CK ID isn't busywork. It's what lets this incident get compared, searched, and defended against using the same shared vocabulary every other SOC uses.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Chase the rest of the kill chain</div>
+          <p>Two detections remained. <span class="sev med">Medium</span> <strong>Unusual User Behavior: System Discovery</strong> showed the attacker reading a sensitive CRM configuration file, likely holding database credentials. <span class="sev low">Low</span> <strong>Hands-On-Keyboard Root Activity</strong> showed up on a second, different host, with traffic out to an external domain, confirming exfiltration.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A detection appearing on a host you haven't seen yet is a lateral-movement flag by itself. The attacker didn't stop at the CRM box, they used it to reach somewhere else.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">9</div>
+        <div class="step-body">
+          <div class="step-title">Close the loop</div>
+          <p>Every detection started life <strong>Not Acknowledged</strong>: logged, but untouched by an analyst. Working through each one's Actions/Response tab and formally responding to all four is what finally releases the room's completion flag.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>This is the actual job, condensed. A detection sitting unacknowledged is still an open risk. Finding the truth is half the work. The other half is closing it out.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">What I Practiced</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Log correlation</div>
+        <p>Turning thousands of raw lines into a pattern using <code>grep</code>, <code>awk</code>, <code>sort</code>, and <code>uniq -c</code>, instead of reading line by line.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Encoding-chain forensics</div>
+        <p>Recognizing and peeling back layered base64 to recover an attacker's actual commands.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">EDR / process-tree triage</div>
+        <p>Reading parent &rarr; child process relationships to prove which binary executed attacker input, as whom.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">ATT&amp;CK mapping and response</div>
+        <p>Naming a technique by its MITRE ID, then working a detection through acknowledge &rarr; respond rather than stopping at "found it."</p>
+      </div>
+    </div>
+  </section>
+
+  <footer><a href="https://tryhackme.com/room/portaldrop">tryhackme.com/room/portaldrop</a> &middot; solved via log analysis and EDR triage</footer>
+
+</div>
+</body>
+</html>

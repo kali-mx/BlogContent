@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The O365 Intrusion: tracing a two-account takeover through audit logs</title>
+  <meta name="description" content="A Splunk/SIEM walkthrough of the TryHackMe O365 Intrusion room: reconstructing a two-account Microsoft 365 takeover from sign-in logs, mailbox access events, an evasive inbox rule, and an external file share.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>The O365 Intrusion: tracing a two-account takeover through audit logs</h1>
+  <p class="dek">A company's Microsoft 365 tenant gets hit: two employee accounts taken over, a mailbox rule quietly deleting evidence, a lure sent from one victim to the next, and a sensitive file walked out the door. Nothing here is a single flag, it's a full timeline built entirely from Splunk queries against the M365 audit log.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: The O365 Intrusion</span>
+    <span class="pill">Category: Blue Team / SIEM / M365 Forensics</span>
+    <span class="pill">Tools: Splunk, Python, curl</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> Vantage Dynamics has had two employee accounts compromised in Microsoft 365. Everything that happened, every sign-in, every email read, every file touched, is sitting in a Splunk index as raw audit log JSON. The job: reconstruct the full intrusion timeline using nothing but SPL queries.</p>
+    <p>No single flag here, the payoff is the timeline itself.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">Background, In Plain Terms</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">SIEM</div>
+        <p>Security Information and Event Management: a giant search engine for log files. Splunk collects every M365 event so an analyst can query it with SPL instead of reading raw logs by hand.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">M365 audit log</div>
+        <p>A unified record of every Outlook, Teams, SharePoint, and OneDrive action: who (<code>UserId</code>), what (<code>Operation</code>), when, from where, and on what file or email.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Sign-in errorCode</div>
+        <p><code>0</code> means access was actually granted. <code>50140</code> fires a few seconds earlier for the "Keep me signed in?" prompt, same login, earlier timestamp, and an easy trap if you don't filter for it.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">MailItemsAccessed</div>
+        <p>Logged whenever a mailbox is read through Outlook. Each event carries a <code>FolderItems</code> array (one entry per email) and an <code>OperationCount</code> summary for that single event, not the whole session.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Inbox rule</div>
+        <p>An automated Outlook filter. Attackers write one to silently delete incoming security alerts or replies before the victim ever sees them. Logged as <code>New-InboxRule</code>.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Sensitivity label</div>
+        <p>An organizational tag (like "Confidential") applied to a file by data governance policy, not by the user. Logged as <code>FileSensitivityLabelApplied</code>.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">External sharing link</div>
+        <p>A SharePoint or OneDrive link that grants access to someone outside the organization. Logged as <code>SharingInvitationCreated</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Build a reusable Splunk query helper</div>
+          <p>The lab's Splunk instance uses a blank password for <code>admin</code>. Rather than fight shell quoting on every query, a small Python wrapper around Splunk's oneshot search API handles authentication once and takes raw SPL as an argument from then on.</p>
+          <pre><code><span class="cm"># /tmp/sp.py</span>
+<span class="ca">import</span> subprocess, json, sys, urllib.parse
+
+BASE = <span class="ca">"https://&lt;IP-with-dashes&gt;.reverse-proxy.cell-prod-us-west-2a.vm.tryhackme.com"</span>
+
+<span class="ca">def</span> search(spl, count=10000):
+    csrf = get_csrf()
+    encoded = urllib.parse.quote(spl)
+    cmd = [<span class="ca">'curl'</span>, <span class="ca">'-sk'</span>, <span class="ca">'-c'</span>, <span class="ca">'/tmp/sc.txt'</span>, <span class="ca">'-b'</span>, <span class="ca">'/tmp/sc.txt'</span>,
+           f<span class="ca">'{BASE}/en-US/splunkd/__raw/services/search/jobs'</span>,
+           <span class="ca">'-H'</span>, <span class="ca">'X-Requested-With: XMLHttpRequest'</span>,
+           <span class="ca">'-H'</span>, f<span class="ca">'X-Splunk-Form-Key: {csrf}'</span>,
+           <span class="ca">'-d'</span>, f<span class="ca">'search={encoded}'</span>, <span class="ca">'-d'</span>, <span class="ca">'output_mode=json'</span>,
+           <span class="ca">'-d'</span>, <span class="ca">'exec_mode=oneshot'</span>, <span class="ca">'-d'</span>, <span class="ca">'earliest_time=0'</span>,
+           <span class="ca">'-d'</span>, <span class="ca">'latest_time=now'</span>, <span class="ca">'-d'</span>, f<span class="ca">'count={count}'</span>]
+    result = subprocess.run(cmd, capture_output=<span class="ca">True</span>, text=<span class="ca">True</span>)
+    <span class="ca">return</span> json.loads(result.stdout)</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Passing SPL through Python instead of a raw shell command sidesteps quoting bugs from special characters in search strings. It also means every later query in this investigation is one function call, not a fresh curl command to get right.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Get oriented in the data</div>
+          <p>Before writing targeted queries, a quick survey of what sourcetypes actually exist in the index:</p>
+          <pre><code>python3 /tmp/sp.py <span class="ca">'search index=vantage | stats count by sourcetype | sort -count'</span></code></pre>
+          <p>Three sourcetypes cover the entire investigation: <code>o365:graph:api</code> for sign-in events with OS and IP, <code>o365:management:activity</code> for email, file, and inbox-rule operations, and <code>o365:reporting:messagetrace</code> for raw email delivery records.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A <code>stats count by sourcetype</code> run first tells you the shape of the haystack before you start searching for needles. It's a cheap habit that pays off every time you touch an unfamiliar index.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Catch the anomalous sign-in</div>
+          <p>The first victim's normal device is a Mac, so the first move is filtering sign-in events for anything that isn't macOS, and specifically for <code>errorCode: 0</code>, the fully completed authentication, rather than the <code>50140</code> "Keep me signed in?" prompt that fires moments earlier for the same login.</p>
+          <pre><code>python3 /tmp/sp.py <span class="ca">'search index=vantage sourcetype="o365:graph:api"
+  userPrincipalName="&lt;victim&gt;"
+  | rex field=_raw "\"operatingSystem\": \"(?P&lt;OS&gt;[^\"]+)\""
+  | rex field=_raw "\"errorCode\": (?P&lt;errorCode&gt;[0-9]+)"
+  | rex field=_raw "\"ipAddress\": \"(?P&lt;IP&gt;[^\"]+)\""
+  | where OS != "MacOs" AND errorCode == 0
+  | table _time OS IP errorCode | sort _time'</span></code></pre>
+          <p>A single result lands: a non-Mac sign-in from an unfamiliar IP, a few minutes after a management-activity event with the same IP but <code>ErrorNumber: 50140</code>, the KMSI prompt, not the completed login.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Microsoft logs two events per interactive sign-in. Whenever a question (or a detection rule) cares about "when did the sign-in happen," filtering for <code>errorCode == 0</code> specifically avoids reporting a timestamp that's seconds too early.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Watch the attacker read the mailbox</div>
+          <p>Right after the sign-in, a burst of <code>MailItemsAccessed</code> events fires in under two minutes:</p>
+          <pre><code>python3 /tmp/sp.py <span class="ca">'search index=vantage sourcetype="o365:management:activity"
+  UserId="&lt;victim&gt;" Operation="MailItemsAccessed"
+  | rex field=_raw "\"OperationCount\": (?P&lt;OpCount&gt;[0-9]+)"
+  | rex field=_raw "\"ClientIPAddress\": \"(?P&lt;ClientIP&gt;[^\"]+)\""
+  | table _time ClientIP OpCount | sort _time'</span></code></pre>
+          <p>Several events fire back to back, and the last one carries a different IP, a Microsoft backend address, still part of the same attacker session, just processed server-side. Summing <code>OperationCount</code> across every event in that window, not just counting events, gives the real total of emails read.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Each <code>MailItemsAccessed</code> event is a batch, not a single email, and some of that batch processing happens on Microsoft's own infrastructure under a different IP. Count the field, not the rows, and don't drop the proxy IP just because it isn't the attacker's.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Spot the cover-your-tracks inbox rule, and confirm it worked</div>
+          <p>Minutes later, a new inbox rule appears:</p>
+          <pre><code>python3 /tmp/sp.py <span class="ca">'search index=vantage sourcetype="o365:management:activity"
+  Operation="New-InboxRule" | table _time UserId _raw'</span></code></pre>
+          <p>The rule's parameters show a subject-contains filter paired with <code>DeleteMessage: True</code>, silently deleting any incoming email that matches. Cross-referencing the message trace for the next matching email after the rule was created confirms it: a reply lands roughly eleven minutes later and never reaches the inbox, because the rule deletes it on arrival.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Inbox rules that delete messages, especially ones created mid-session from an already-suspicious IP, are a high-fidelity detection signal. Confirming the rule actually fired (by finding the matching email it should have caught) turns "a rule exists" into "the rule worked and this is what it hid."</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Catch the pivot to a second victim</div>
+          <p>The same compromised account is also used to pivot, sending a Teams message to a second employee with a file link attached:</p>
+          <pre><code>python3 /tmp/sp.py <span class="ca">'search index=vantage sourcetype="o365:management:activity"
+  UserId="&lt;victim&gt;" Operation="MessageCreatedHasLink" | table _time _raw'</span></code></pre>
+          <p>The linked file's name carries a double extension, a document-looking name followed by a second, hidden copy of the same extension. Windows File Explorer hides the final extension by default, so the recipient sees what looks like an ordinary document and has no reason to hesitate.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A compromised account isn't just a mailbox to rifle through, it's trusted infrastructure for reaching the next target. The double-extension trick works specifically because it exploits a Windows display default, not a technical vulnerability, so it's social engineering wearing a technical disguise.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Confirm the second compromise and trace the exfil target</div>
+          <p>A new sign-in to the second employee's account appears not long after the Teams message, from a different OS and a different IP than the first attack entirely, separate attacker infrastructure. Shortly after that sign-in, a <code>FileDownloaded</code> event shows a financial spreadsheet pulled from the Leadership SharePoint site:</p>
+          <pre><code>python3 /tmp/sp.py <span class="ca">'search index=vantage sourcetype="o365:management:activity"
+  UserId="&lt;victim-2&gt;" Operation="FileDownloaded"
+  | table _time ClientIP SourceFileName | sort _time'</span></code></pre>
+          <p>Pivoting to that same file's full history shows it was legitimately edited by its real owner earlier that same day, and that a sensitivity label (an org policy tag, not something a user sets manually) had already been applied to it, well before the attacker ever touched it.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The timing gap between the Teams lure and the second sign-in is itself evidence, it's roughly how long it took the attacker to convert a social-engineering message into working credentials. And checking a file's history before the compromise is what proves the attacker grabbed something the organization already knew was sensitive, not an arbitrary file.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Catch the external share and its notification trail</div>
+          <p>Filtering sharing operations down to just the attacker's IP on the second account finds the exfiltration step: an external sharing link created for a separate document, sent to an address outside the organization entirely.</p>
+          <pre><code>python3 /tmp/sp.py <span class="ca">'search index=vantage sourcetype="o365:management:activity"
+  UserId="&lt;victim-2&gt;"
+  (Operation="SharingInvitationCreated" OR Operation="SharingLinkUpdated")
+  ClientIP="&lt;attacker-ip&gt;"
+  | table _time Operation SourceFileName TargetUserOrGroupName | sort _time'</span></code></pre>
+          <p>The target name carries an <code>#ext#</code> marker, Microsoft's notation for a guest account from outside the tenant. The message trace for that same timestamp confirms SharePoint actually sent the notification email, closing the loop from "a sharing event was logged" to "the file was really handed to someone outside the company."</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Correlating two independent log sources, the management-activity sharing event and the message-trace delivery record, for the same timestamp is what turns a single log line into proof the exfiltration actually completed, not just that someone clicked a button.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>Attacker A (new OS, new IP)
+  &rarr; Successful sign-in to Account 1 (errorCode 0, after the 50140 decoy)
+       &rarr; Mailbox rifled: dozens of emails read in under two minutes
+       &rarr; Inbox rule created: silently deletes incoming replies matching a keyword
+            &rarr; Confirmed working: a matching reply arrives and vanishes
+       &rarr; Teams message sent to Account 2 with a double-extension lure file
+
+Attacker B (different OS, different IP)
+  &rarr; Successful sign-in to Account 2, minutes after the Teams lure
+       &rarr; Sensitive financial file downloaded from the Leadership site
+            &rarr; Confirmed pre-existing: legitimately edited and labeled earlier that day
+       &rarr; External sharing link created for a second document
+            &rarr; Sent to a guest address outside the organization
+            &rarr; SharePoint notification confirms delivery</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>Splunk</td><td>Primary log search platform across all three M365 sourcetypes</td></tr>
+        <tr><td>Python3</td><td>Splunk oneshot API wrapper, reliable SPL execution without shell-escaping issues</td></tr>
+        <tr><td>curl</td><td>Splunk authentication and the underlying raw API calls</td></tr>
+        <tr><td><code>o365:graph:api</code></td><td>Sign-in events with OS, IP, and errorCode</td></tr>
+        <tr><td><code>o365:management:activity</code></td><td>Email, file, and inbox-rule operations</td></tr>
+        <tr><td><code>o365:reporting:messagetrace</code></td><td>Raw email delivery records</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">errorCode 50140 is not the sign-in</div>
+        <p>Microsoft fires two audit events per interactive login: a KMSI prompt, then the real grant. Always filter for the completed one when timing matters.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Inbox rules are a detection evasion tool</div>
+        <p>A delete rule created mid-session from a suspicious IP is a high-fidelity signal, especially one aimed at the exact kind of email that would expose the fraud.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Count the field, not the event</div>
+        <p><code>MailItemsAccessed</code> batches multiple emails per event, and some of that batch gets processed under Microsoft's own IP, not the attacker's. Sum the right field across the whole window.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A compromised account is a pivot tool</div>
+        <p>The first account wasn't just rifled through, it was used to lure a second victim with a file name exploiting a Windows display default.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Sensitivity labels build an audit trail</div>
+        <p>They don't stop theft, but a label applied before the attacker ever touched the file proves exactly what the organization already knew was sensitive.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via Splunk / SIEM log correlation</footer>
+
+</div>
+</body>
+</html>

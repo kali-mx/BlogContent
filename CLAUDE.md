@@ -34,6 +34,26 @@ process below instead of being added in that old format.
      `.notebook` callout at the end explaining **why** the technique
      works, not just what was typed. This "why this works" note on every
      step is the whole pedagogical point, don't skip it.
+
+     **Hard rule: every `<pre><code>` block must be verbatim from the
+     source, not a paraphrase, not a reconstruction, not a placeholder.**
+     Real commands with real flags, real IPs/hashes/output exactly as
+     captured in the source screenshots or notes, never `<victim>`,
+     `<target-ip>`, or similar stand-ins unless the source itself never
+     actually showed the real value. A step whose only evidence is a
+     sentence describing what happened, with no copyable command behind
+     it, has failed the one job this site exists to do: let a learner
+     reproduce the steps. This regressed once already (the first pass on
+     Hacker of the Hill summarized the attack in prose with 2-3 token
+     code blocks instead of transcribing the ~20 real commands and
+     outputs sitting right there in the source PDF), caught by the user
+     reading the published page and noticing it "wasn't reproducible."
+     Before considering a writeup done, count the `<pre><code>` blocks
+     against the number of distinct commands/outputs actually shown in
+     the source, they should roughly match. If a PDF's source is
+     screenshots, read every page at full resolution and transcribe the
+     terminal/browser text directly, don't summarize what the screenshot
+     shows.
    - Optional "Full Attack Chain" `<pre>` ASCII tree summarizing the
      timeline (nice visual recap, not required)
    - Optional `table.ref` (see style.css) for a "Tools Used" reference table
@@ -120,9 +140,12 @@ table), add it to the shared stylesheet, not inline in the page.
 
 ## Known gaps / not yet done
 
-- The root-level PDF/Markdown writeups predating this pipeline haven't
-  been migrated or linked from the index. Leave them unless the user
-  asks to migrate one.
+- The root-level PDF/Markdown source files are left in place after
+  migration (not deleted), both as a backup and because the user hasn't
+  asked for cleanup. A handful of originally-skipped files (tool demo
+  video stubs, an unrelated Django tutorial, loose scripts/images)
+  deliberately have no corresponding writeup, see the git log around
+  the initial migration commits for the full skip list and why.
 - No RSS/sitemap, no tagging/filtering on the index, it's just a flat
   reverse-chronological list. Fine for now, revisit if the list grows
   large.

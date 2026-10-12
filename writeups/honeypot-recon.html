@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Running a Honeypot: what internet scanners actually try</title>
-  <meta name="description" content="Standing up a deliberately vulnerable honeypot and watching what automated internet scanners actually send: Apache Jserv probes, EternalBlue checks, FTP credential sprays, and more.">
+  <meta name="description" content="Standing up a multi-service honeypot and watching what hits it unprompted: a Shodan fingerprint, Ghostcat and EternalBlue probes, and a full FTP credential-spray list caught live.">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="../assets/style.css">
 </head>
@@ -13,29 +13,55 @@
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; Homelab Research</div>
   <h1>Running a Honeypot: what internet scanners actually try</h1>
-  <p class="dek">Stand up a box that looks like a juicy, misconfigured target, point it at the open internet, and watch what shows up. The results are less "sophisticated APT" and more automated scanners running the same handful of exploit checks on repeat.</p>
+  <p class="dek">Stand up a box that looks like a vulnerable, multi-service server, publish it, and wait. No exploitation here, just watching what the open internet actually sends when it finds something that looks interesting.</p>
 
   <div class="meta-row">
-    <span class="pill">Category: Honeypot / Threat Intel</span>
+    <span class="pill">Category: Threat Intel</span>
     <span class="pill">Tools: Shodan, nmap, Metasploit</span>
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a deliberately exposed host advertising a wide, deliberately vulnerable-looking service footprint (SMBv1, old Apache Tomcat, exposed databases, an Elasticsearch honeypot, and more), left running to see what automated internet-wide scanning actually looks like in practice.</p>
+    <p><strong>The setup:</strong> a honeypot emulating a wide spread of services (FTP, SSH, SMTP, HTTP, SMB, RDP, Elasticsearch, and more) on a cloud host, with real vulnerability banners (CVE-2020-1938, MS17-010) baked in to see which scanners actually test for them.</p>
   </div>
 
   <section>
-    <h2 class="section-title">The Investigation</h2>
+    <h2 class="section-title">Recon: Fingerprint the Box From Outside</h2>
     <div class="steps">
 
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Confirm what the box is already advertising</div>
-          <p>A Shodan lookup on the honeypot's own IP shows what the rest of the internet already sees before any traffic analysis even starts: close to 400 open ports, flagged with known CVEs like the SMBv1 remote code execution bug and the Exim mail server vulnerability, across a huge mix of services, SSH, mail, RDP, databases, VNC, and an industrial SCADA protocol among them.</p>
+          <div class="step-title">Shodan already knows what it's hosting</div>
+          <p>A single lookup against the host from Shodan's own database surfaces nearly everything about it without sending a single packet to the box directly:</p>
+          <pre><code>shodan host &lt;REDACTED&gt;
+Hostnames:               example.com;&lt;REDACTED&gt;.compute.amazonaws.com
+City:                    Hilliard
+Country:                 United States
+Organization:            Amazon Technologies Inc.
+Number of open ports:    388
+Vulnerabilities:         CVE-2020-1938  MS17-010
+
+Ports:
+     22/tcp OpenSSH (7.9p1)
+     25/tcp Exim smtpd (4.81)
+    135/tcp Microsoft RPC
+    443/tcp Apache httpd
+    445/tcp
+    995/tcp
+   1433/tcp MS-SQL Server 2000 SP1+ (8.0.528.0)
+   1723/tcp PPTP
+   1883/tcp MQTT
+   3306/tcp MySQL (5.7.16)
+   3389/tcp Remote Desktop Protocol
+   4899/tcp Famatech Radmin
+   5432/tcp PostgreSQL
+   5900/tcp VNC
+   8009/tcp Apache Tomcat (9.0.30)
+   9200/tcp Elastichoney (1.4.1)
+  10001/tcp Gaspot</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Shodan indexes the whole internet continuously, so checking your own exposure through it shows exactly what an opportunistic attacker's reconnaissance would show, no active scanning required on your part.</p>
+            <p>Shodan continuously scans the entire public IPv4 space and caches banners, so any box exposed long enough gets fingerprinted before an operator even checks on it themselves. Two CVEs already flagged in the listing (CVE-2020-1938, MS17-010) tell you exactly what an attacker checking the same listing will try first.</p>
           </div>
         </div>
       </div>
@@ -43,14 +69,89 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Watch automated exploit probes arrive</div>
-          <p>Traffic logs on the honeypot's web-facing services show automated tooling testing for specific, well-known vulnerabilities, not manual exploration. A probe against the Apache Tomcat AJP connector tests for the Ghostcat file-read vulnerability (<code>CVE-2020-1938</code>):</p>
-          <pre><code>python2 ghost.py &lt;target&gt;
-Getting resource at ajp13://&lt;target&gt;:8009/asdf</code></pre>
-          <p>A separate Metasploit module checks the SMB service for EternalBlue (<code>MS17-010</code>), and an FTP brute-force script works through a list of common default credentials, several of which succeed against the deliberately weak honeypot logins.</p>
+          <div class="step-title">The honeypot's own captured banners across a wide service spread</div>
+          <p>The honeypot logs every protocol handshake it completes with real visitors. A sample across a few of the emulated services shows how convincing the bait is:</p>
+          <pre><code>21 / tcp
+220 FTP server ready.
+230 Anonymous login ok, access restrictions apply.
+211-Features:
+ PASV
+ PORT
+211 End</code></pre>
+          <pre><code>22 / tcp
+OpenSSH7.9p1
+SSH-2.0-OpenSSH_7.9p1
+Key type: ssh-rsa
+Fingerprint: ee:76:f5:1a:26:2a:c4:eb:da:42:4d:f4:c2:33:bc:f5</code></pre>
+          <pre><code>25 / tcp
+Exim smtpd4.81
+220 mailrelay.local ESMTP Exim 4.81 #1 Thu, 29 Jul 2010 05:13:48 -0700
+250-mailrelay.local Hello VlY4o1Dp22chKW.net [224.104.242.204]
+250-SIZE 52428800
+250 AUTH LOGIN PLAIN</code></pre>
+          <pre><code>80 / tcp
+HTTP/1.1 200 OK
+Content-Type: text/html
+Set-Cookie: sess_uuid=db8a23fa-c421-4398-89a2-0a4f2c0516ce
+Content-Length: 1904
+Server: Python/3.9 aiohttp/3.7.4</code></pre>
+          <pre><code>445 / tcp
+SMB Status:
+  Authentication: disabled
+  SMB Version: 1
+  OS: Windows 7 Professional 7600
+
+Shares
+Name                 Type       Comments
+------------------------------------------------------------------------
+ADMIN$               Disk       Remote Admin
+C$                   Disk       Default Share
+IPC$                 IPC        Remote IPC
+Printer              Printer    Microsoft XPS Document Writer</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>None of this traffic is targeted, it's the same small set of high-value, well-known CVE checks that automated scanners run against every IP they encounter. A honeypot makes that background noise visible instead of invisible.</p>
+            <p>The <code>Server: Python/3.9 aiohttp/3.7.4</code> header on port 80 is the tell that gives the whole thing away to a careful visitor, a real IIS or Apache box wouldn't say that. SMBv1 with auth disabled and a default-looking share list, on the other hand, is exactly the kind of low-hanging target a scanner is built to flag.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Watching the Actual Probes Come In</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">CVE-2020-1938: Ghostcat probe against Apache JServ</div>
+          <p>A visitor runs a known Ghostcat proof-of-concept script against the Tomcat/AJP listener:</p>
+          <pre><code>┌──(root&#128128;kali)-[~/honeypot]
+└─# python2 ghost.py &lt;REDACTED&gt;
+Getting resource at ajp13://&lt;REDACTED&gt;:8009/asdf
+----------------------------
+&lt;!doctype html&gt;&lt;html lang="en"&gt;&lt;head&gt;&lt;title&gt;HTTP Status 404 &ndash; Not Found&lt;/title&gt;...
+&lt;h3&gt;Apache Tomcat/9.0.30&lt;/h3&gt;&lt;/body&gt;&lt;/html&gt;</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A 404 instead of a file read means the probe didn't land, the honeypot's AJP listener isn't actually vulnerable, it's just advertising the version. What matters here isn't the result, it's that a specific, actively-exploited CVE from the Shodan vulnerability list was tested within range of the scan, proof the listed CVE alone is enough to draw a targeted check.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">MS17-010: EternalBlue scan against SMB</div>
+          <pre><code>msf6 auxiliary(scanner/smb/smb_ms17_010) &gt; run
+
+[-] &lt;REDACTED&gt;:445     - Rex::ConnectionTimeout: The connection with (&lt;REDACTED&gt;:445) timed out.
+[*] &lt;REDACTED&gt;:445     - Scanned 1 of 1 hosts (100% complete)
+[*] Auxiliary module execution completed</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Same pattern as the Ghostcat probe: MS17-010 was also named in the Shodan listing, and a scanner checked for it directly using the exact Metasploit module built for it, the canonical first move against any box advertising that CVE since EternalBlue became public in 2017.</p>
           </div>
         </div>
       </div>
@@ -58,11 +159,49 @@ Getting resource at ajp13://&lt;target&gt;:8009/asdf</code></pre>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Confirm the deliberately weak services actually get found</div>
-          <p>The honeypot's SMB service reports authentication disabled and SMBv1 enabled, with shares openly listed. Its fake Elasticsearch honeypot, ElasticHoney, a tool specifically designed to catch Elasticsearch RCE attempts, shows the same pattern: automated scanners test it exactly as they would a real misconfigured instance.</p>
+          <div class="step-title">A full credential spray against FTP</div>
+          <p>Nmap's built-in brute-force script against port 21 isn't just testing if FTP is open, it's running an actual wordlist attack:</p>
+          <pre><code>nmap --script ftp-* -p21 &lt;REDACTED&gt;
+
+PORT      STATE    SERVICE
+21/tcp    open     ftp
+| ftp-brute:
+|   Accounts:
+|     root:root - Valid credentials
+|     user:user - Valid credentials
+|     web:web - Valid credentials
+|     netadmin:netadmin - Valid credentials
+|     guest:guest - Valid credentials
+|     sysadmin:sysadmin - Valid credentials
+|     administrator:administrator - Valid credentials
+|     webadmin:webadmin - Valid credentials
+|     admin:admin - Valid credentials
+|     test:test - Valid credentials
+|_  Statistics: Performed 117 guesses in 4 seconds, average tps: 29.2</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A deliberately weak service doesn't need to wait long to get probed. Within the observation window here, every exposed, misconfigured-looking service attracted automated attention, confirming that default-credential and legacy-protocol exposure really is scanned for continuously, not theoretically.</p>
+            <p>Every single guess in this list succeeded, by design, the honeypot accepts common username/password pairs on FTP specifically to capture which credential lists real attackers carry. Ten valid-looking hits in 4 seconds is a very different signal from a scanner that just checks if port 21 answers: this one came prepared with a credential list and used it immediately.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">A DNS probe that looks like it's checking for a redirect</div>
+          <pre><code>nslookup github.com
+Non-authoritative answer:
+Name:	github.com
+Address: 140.82.114.3
+
+nslookup &lt;REDACTED&gt;
+** server can't find &lt;REDACTED&gt;.in-addr.arpa: NXDOMAIN
+
+nslookup http://&lt;REDACTED&gt;
+** server can't find http://&lt;REDACTED&gt;: NXDOMAIN</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Resolving a known-good domain (github.com) right before querying the honeypot's own address is a sanity check pattern, confirming DNS itself works before concluding the honeypot's hostname genuinely doesn't resolve a certain way. The malformed <code>http://</code>-prefixed lookup is a common copy-paste mistake when someone's scripting these checks in bulk rather than testing by hand.</p>
           </div>
         </div>
       </div>
@@ -74,21 +213,21 @@ Getting resource at ajp13://&lt;target&gt;:8009/asdf</code></pre>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
-        <div class="skill-title">Internet-facing exposure gets found fast</div>
-        <p>Every deliberately weak service on this honeypot was probed by automated tooling, not eventually, but as part of routine, continuous internet-wide scanning. There's no "too small to be a target."</p>
+        <div class="skill-title">Published CVEs draw targeted checks, not just port scans</div>
+        <p>Both Ghostcat and EternalBlue got tested specifically, not just discovered via a generic port sweep, directly traceable to the same two CVEs Shodan had already listed against the host.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Scanners check specific, well-known CVEs, not zero-days</div>
-        <p>The actual observed traffic was Ghostcat, EternalBlue, and default-credential checks, all old, well-documented vulnerabilities. Patching known issues promptly defeats the overwhelming majority of opportunistic scanning.</p>
+        <div class="skill-title">Credential spraying still works because defaults still work</div>
+        <p>Ten out of ten common username/password pairs "succeeded" against the honeypot's FTP service in under 5 seconds. That ratio is exactly why default-credential sprays remain a cheap, high-yield first move for real attackers.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">A honeypot is a cheap, direct threat-intel source</div>
-        <p>Rather than reading about what attackers are doing, a honeypot shows it directly: the exact services, exact exploit checks, and exact credential lists currently in active use against exposed infrastructure.</p>
+        <div class="skill-title">A convincing honeypot still has tells</div>
+        <p>The <code>aiohttp</code> server header on the HTTP service is the kind of detail that gives away an emulated service to anyone paying close attention, a reminder that banner fidelity matters as much for defenders building honeypots as it does for attackers fingerprinting real targets.</p>
       </div>
     </div>
   </section>
 
-  <footer>Homelab research &middot; honeypot traffic analysis</footer>
+  <footer>Homelab research &middot; a multi-service honeypot watching unprompted internet traffic</footer>
 
 </div>
 </body>

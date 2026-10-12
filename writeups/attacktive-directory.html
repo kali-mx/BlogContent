@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Attacktive Directory: from AS-REP roast to domain admin</title>
+  <meta name="description" content="A TryHackMe Active Directory walkthrough: enumerating valid usernames, abusing a missing pre-auth flag to steal a crackable Kerberos hash, pivoting through a leftover credentials file, and DCSync-ing the domain to full admin.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Attacktive Directory: from AS-REP roast to domain admin</h1>
+  <p class="dek">A lightly hardened Active Directory domain, cracked open end to end: enumerate valid usernames, abuse a missing pre-auth flag to steal a crackable Kerberos hash, pivot through a leftover credentials file on a file share, and walk out with the domain's NTLM hashes.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Attacktive Directory</span>
+    <span class="pill">Category: Active Directory</span>
+    <span class="pill">Tools: Kerbrute, Impacket, Hashcat, Evil-WinRM</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a domain controller for <code>spookysec.local</code> is reachable with nothing but an IP. The job: go from zero credentials to a full set of domain NTLM hashes using only what Active Directory exposes to anyone who can talk to it.</p>
+    <p>No single flag in these notes, the target is domain admin itself.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">Background, In Plain Terms</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">AS-REP Roasting</div>
+        <p>If a Kerberos account has "Do not require Kerberos preauthentication" set, anyone can request a ticket for it, no password needed, and the ticket comes back encrypted with that account's password hash. Crack the ticket offline and you've got the password.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">DCSync</div>
+        <p>A domain controller will hand over password hashes for any account to another DC, that's normal replication. If an account holds the right replication permissions, a tool can impersonate a DC and pull those hashes directly, no code execution on the DC required.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Pass-the-hash</div>
+        <p>Windows authentication protocols accept an NTLM hash in place of a plaintext password. Once you have a hash, you don't need to crack it to use it, you can authenticate with the hash itself.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Map the domain</div>
+          <p>A standard service scan lays out the whole picture immediately: this is a domain controller.</p>
+          <pre><code>nmap -sC -sV -v 10.10.189.184</code></pre>
+          <p>DNS, Kerberos, LDAP (twice, once unauthenticated on 389 and once over Global Catalog on 3268), SMB, and RDP are all open, and the LDAP banner names the domain outright: <code>spookysec.local</code>. <code>enum4linux</code> against it comes back mostly empty, a dead end worth noting and moving past quickly rather than forcing it.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A domain controller's own open ports usually name the domain before you've sent a single authenticated request. Kerberos (88) plus LDAP (389/3268) together is as close to a neon sign reading "Active Directory" as a port scan gets.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Enumerate valid usernames</div>
+          <p>Kerberos itself leaks whether a username is valid, since the server responds differently for a real account than for a nonexistent one. <code>kerbrute</code> automates that check against a wordlist:</p>
+          <pre><code>kerbrute -users /opt/userlist.txt -dc spookysec.local -domain spookysec.local -t 100</code></pre>
+          <p>Several valid accounts come back, among them <code>svc-admin</code>, <code>administrator</code>, and <code>backup</code>, and <code>svc-admin</code> is flagged <code>[NOT PREAUTH]</code>.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>That <code>NOT PREAUTH</code> flag isn't incidental, Kerbrute surfaces it because it's the exact precondition for AS-REP Roasting. A username enumeration step just handed over the one account worth attacking next.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Steal a crackable hash with AS-REP Roasting</div>
+          <p>Since <code>svc-admin</code> doesn't require pre-authentication, requesting a Kerberos ticket for it needs no password at all:</p>
+          <pre><code>python3 GetNPUsers.py spookysec.local/svc-admin -no-pass</code></pre>
+          <p>The response is a <code>$krb5asrep$</code> hash, the account's password hash wrapped in a Kerberos ticket, ready to crack offline.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Pre-authentication exists specifically to stop exactly this: an attacker requesting a ticket without proving they already know the password. Disable it on one account and that account's hash is handed to anyone who asks.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Crack it offline</div>
+          <p>Hashcat mode <code>18200</code> is built for exactly this ticket format:</p>
+          <pre><code>hashcat -m 18200 TGT.txt passwordlist.txt --force
+hashcat -m 18200 TGT.txt passwordlist.txt --show --force</code></pre>
+          <p>John the Ripper works just as well with <code>--format=krb5asrep</code>. Either way, a dictionary match on a weak service-account password recovers <code>svc-admin</code>'s plaintext credential in seconds.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>AS-REP hashes are only as strong as the account's password, there's no account lockout to slow down offline guessing once you have the hash in hand. A weak password on any pre-auth-exempt account undoes the protection entirely.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Walk the file shares with the cracked creds</div>
+          <p>Valid domain credentials, even for a low-privilege service account, are usually enough to list SMB shares:</p>
+          <pre><code>smbclient -L spookysec.local -U svc-admin</code></pre>
+          <p>Alongside the usual <code>SYSVOL</code>/<code>NETLOGON</code> shares sits a non-default one named <code>backup</code>. Mounting it turns up a single file: <code>backup_credentials.txt</code>.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A share name that doesn't match any Windows default is worth checking first. Custom shares usually exist because someone put something there on purpose, and "backup" is a very common place for exactly the kind of leftover credentials file this turned out to be.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Decode the leftover credentials</div>
+          <p>The file's contents are a single base64 blob:</p>
+          <pre><code>smb: \&gt; more backup_credentials.txt
+echo '&lt;base64 blob&gt;' | base64 -d</code></pre>
+          <p>Decoded, it's a second set of domain credentials entirely, a <code>backup</code> account with its own password. (The same file is just as easy to pull with Metasploit's <code>auxiliary/admin/smb/download_file</code> module if a GUI workflow is preferred over the raw SMB client.)</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Base64 is encoding, not encryption, it was never meant to hide the content from anyone who finds the file, only to make it safe to store as text. A credentials file left in a share called "backup" is almost always exactly what it looks like.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">DCSync the domain</div>
+          <p>The <code>backup</code> account turns out to hold replication rights on the domain, which is all <code>secretsdump.py</code> needs to impersonate a domain controller and request every account's hashes:</p>
+          <pre><code>secretsdump.py backup:&lt;password&gt;@10.10.32.27</code></pre>
+          <p>The DRSUAPI method pulls the full NTDS secrets, including the Administrator account's NTLM hash.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>DCSync abuses a legitimate, necessary feature: domain controllers have to replicate credential data to each other to function. Any account holding those replication permissions can request the same data a real DC would get, no foothold on the DC itself required.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Pass the hash to full admin</div>
+          <p>With the Administrator's NTLM hash in hand, there's no need to crack it, Windows authentication accepts the hash directly:</p>
+          <pre><code>evil-winrm -i spookysec.local -u Administrator -H &lt;ntlm-hash&gt;</code></pre>
+          <p>That lands an interactive PowerShell session on the domain controller as Administrator, full control over the domain.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Pass-the-hash closes the loop on DCSync. The whole chain never required cracking a strong password, it chained together one weak account, one leftover file, and one legitimate replication feature.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>nmap: Kerberos + LDAP open &rarr; spookysec.local, a domain controller
+  &rarr; Kerbrute: svc-admin found, flagged NOT PREAUTH
+       &rarr; GetNPUsers.py: AS-REP hash stolen, no password needed
+            &rarr; hashcat/john: hash cracked, svc-admin password recovered
+                 &rarr; smbclient: "backup" share found, backup_credentials.txt inside
+                      &rarr; base64 decode: a second account's credentials
+                           &rarr; secretsdump.py (DCSync): Administrator's NTLM hash dumped
+                                &rarr; evil-winrm (pass-the-hash): domain admin shell</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>nmap</td><td>Initial service scan identifying the domain controller and domain name</td></tr>
+        <tr><td>Kerbrute</td><td>Username enumeration against Kerberos, surfaces the pre-auth-exempt account</td></tr>
+        <tr><td>Impacket (GetNPUsers, secretsdump)</td><td>AS-REP hash extraction and the DCSync-style hash dump</td></tr>
+        <tr><td>Hashcat / John the Ripper</td><td>Offline cracking of the AS-REP hash</td></tr>
+        <tr><td>smbclient</td><td>Share enumeration and file retrieval with the cracked credentials</td></tr>
+        <tr><td>Evil-WinRM</td><td>Pass-the-hash authentication for the final admin shell</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">One misconfigured flag can undo Kerberos entirely</div>
+        <p>"Do not require preauthentication" on a single account turns offline password cracking into a trivial first move, no foothold needed to request the hash.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">File shares are an underrated enumeration target</div>
+        <p>A single leftover credentials file in a non-default share moved this chain from one low-privilege service account all the way to domain replication rights.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Replication rights are as sensitive as domain admin</div>
+        <p>Any account that can DCSync can retrieve any other account's hash, including Administrator's. That permission should be audited as carefully as actual admin group membership.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via Active Directory enumeration and credential chaining</footer>
+
+</div>
+</body>
+</html>

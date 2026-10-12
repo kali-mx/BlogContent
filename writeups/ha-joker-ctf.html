@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HA: Joker, a Joomla credential chain to an LXD container escape</title>
+  <meta name="description" content="A TryHackMe walkthrough: a robots.txt leak identifying Joomla behind HTTP Basic Auth, cracking a backup zip and the bcrypt admin hash inside it, a template-editor reverse shell, and the classic LXD group privilege escalation.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>HA: Joker, a Joomla credential chain to an LXD container escape</h1>
+  <p class="dek">Two web ports, two very different postures: one wide open, one locked behind HTTP Basic Auth that still leaks its own CMS identity through robots.txt. From there, a cracked zip, a cracked bcrypt hash, a template-editor shell, and a well-known container group that hands over root.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: HA: Joker</span>
+    <span class="pill">Category: Web / Linux Privesc</span>
+    <span class="pill">Tools: Hydra, Nikto, zip2john, John the Ripper</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a box running Joomla behind HTTP Basic Auth on a non-standard port, with a plain unauthenticated site on port 80 alongside it. The job: find a way through the auth layer, get admin access to Joomla, and escalate from a web shell to root.</p>
+    <p>No flag appears in these notes, the credential chain is the interesting part.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Spot two web ports with very different postures</div>
+          <p>A service scan shows SSH, a plain Apache site on 80, and a second Apache instance on 8080 that immediately demands HTTP Basic Auth:</p>
+          <pre><code>nmap -sV -sC 10.10.13.152</code></pre>
+          <p>Port 8080 responds <code>401 Unauthorized</code> to everything, with a generic realm message, no obvious hint yet about what's actually running behind it.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Two web services on the same box rarely exist in isolation from each other. The plain, unauthenticated port 80 site is worth enumerating first, it may describe or link to what's sitting behind the locked one.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Enumerate the open port first</div>
+          <p>A directory brute force against port 80 turns up a couple of useful loose ends alongside the expected noise:</p>
+          <pre><code>gobuster dir -u http://10.10.13.152 -w /usr/share/wordlists/dirb/common.txt -q -t 15 -x php,html,txt</code></pre>
+          <p><code>/secret.txt</code> and <code>/phpinfo.php</code> both return <code>200</code>, worth noting even before it's clear whether either feeds into the real path forward.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Not every discovered path turns into the exploit chain, some are just context. Logging them anyway means they're available later if the main path stalls.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Let robots.txt identify the locked app, then brute-force it</div>
+          <p>Basic Auth protects every path on port 8080 except, as it turns out, <code>/robots.txt</code>. Fetching it anonymously works, and its contents, a long list of <code>Disallow</code> rules for <code>/administrator/</code>, <code>/components/</code>, <code>/modules/</code>, is a Joomla installation's default robots file almost verbatim. The app behind the login prompt is now known without ever authenticating to it.</p>
+          <p>With a username guessed from context (<code>joker</code>, matching the room and site branding) and a wordlist, Hydra brute-forces the Basic Auth directly:</p>
+          <pre><code>hydra 10.10.13.152 -s 8080 -l joker -P /usr/share/wordlists/rockyou.txt -f http-get</code></pre>
+          <p>A valid password comes back.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Authentication layers frequently forget that a handful of default, well-known paths (<code>robots.txt</code>, favicon files, default CMS assets) tend to stay excluded from the auth rule, intentionally or not, and those defaults can fingerprint the exact software running behind the lock.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Let an authenticated scanner find what manual enumeration might miss</div>
+          <p>With working credentials, Nikto can now crawl everything that was previously locked away:</p>
+          <pre><code>nikto -h http://10.10.13.152:8080/ -id joker:&lt;password&gt;</code></pre>
+          <p>Among its findings: <code>/backup.zip</code>, flagged directly as a potentially interesting archive.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>An authenticated scan sees an entirely different attack surface than an anonymous one. Once credentials exist for a Basic Auth layer, re-running the same enumeration tools with them attached is worth doing, not just moving straight to the login page.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Crack two layers of credentials</div>
+          <p>The backup archive is itself password-protected. <code>zip2john</code> extracts a crackable hash from it for John the Ripper, recovering the zip's own password and unlocking its contents: a full Joomla database dump.</p>
+          <p>Reading the dump directly turns up the admin account's password hash in plain SQL:</p>
+          <pre><code>INSERT INTO `cc1gr_users` VALUES (547,'Super Duper User','admin',
+  'admin@example.com','$2y$10$&lt;bcrypt hash&gt;', ...);</code></pre>
+          <p>It's bcrypt, slower to crack than a fast hash, but still beatable against a weak, common password:</p>
+          <pre><code>john --wordlist=/usr/share/wordlists/rockyou.txt hash</code></pre>
+          <p>The Joomla admin account's real password comes back in seconds.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Every layer of this archive, the zip password and the database hash inside it, ultimately comes down to password strength. A weak password at any single layer collapses the whole chain, regardless of how strong the encryption or hashing algorithm protecting it actually is.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Get code execution through the Template Editor</div>
+          <p>Logged into the Joomla admin panel, <strong>Extensions &gt; Templates &gt; Templates</strong> opens the active template's source files directly in a web-based code editor. Opening an existing PHP file inside the <code>protostar</code> template and replacing its contents with a PHP reverse shell, then hitting Save, writes that shell straight to a predictable, publicly reachable path.</p>
+          <p>With a listener running, requesting that path in a browser triggers it:</p>
+          <pre><code>nc -lvnp 4444
+<span class="cm"># then browse to http://&lt;target&gt;:8080/templates/protostar/shell.php</span></code></pre>
+          <p>The listener catches a shell as <code>www-data</code>.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Joomla's Template Editor is functionally a built-in, authenticated file-write primitive onto the live web root. Any admin account, however it was obtained, can turn that editor into code execution with nothing more than pasting in a shell and saving.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Spot the privesc path in the shell's own group membership</div>
+          <p>A quick <code>id</code> right after landing the shell is often the single most useful first command, and here it's immediately telling:</p>
+          <pre><code>id
+<span class="cm"># uid=33(www-data) gid=33(www-data) groups=33(www-data),115(lxd)</span></code></pre>
+          <p>Membership in the <code>lxd</code> group is a well-known, direct path to root: any account in that group can create and configure LXD containers, and LXD containers can be configured to mount the entire host filesystem with root privileges.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Group membership is a privilege boundary just as real as file permissions, and <code>lxd</code>/<code>lxc</code> group membership specifically is equivalent to root on most default LXD installs, because the daemon trusts anyone in that group to configure containers however they like, security options included.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Build and deploy a privileged container to break out to root</div>
+          <p>The target can't compile the Alpine image itself, so that step happens on a separate attack box instead:</p>
+          <pre><code>git clone https://github.com/saghul/lxd-alpine-builder.git
+cd lxd-alpine-builder
+./build-alpine</code></pre>
+          <p>The resulting image transfers to the target, imports into LXD, and starts as a privileged container with the entire host filesystem mounted inside it:</p>
+          <pre><code>lxc image import alpine-v3.12-x86_64-&lt;date&gt;.tar.gz --alias myalpine
+lxc init myalpine joker -c security.privileged=true
+lxc config device add joker mydevice disk source=/ path=/mnt/root recursive=true
+lxc start joker
+lxc exec joker /bin/sh</code></pre>
+          <p><code>id</code> inside that container shell confirms it: <code>uid=0(root) gid=0(root)</code>, with the entire host filesystem readable and writable from <code>/mnt/root</code>.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A <code>security.privileged=true</code> container isn't meaningfully isolated from its host at all, root inside the container is root on the host, and mounting the host's own root filesystem into it makes that explicit. The whole chain from <code>lxd</code> group membership to a root shell is a handful of standard LXD commands, no exploit code required.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>nmap: port 80 open, port 8080 behind Basic Auth
+  &rarr; gobuster on :80: /secret.txt, /phpinfo.php noted
+       &rarr; robots.txt on :8080 (unauthenticated): identifies Joomla
+            &rarr; Hydra brute-forces Basic Auth: joker:&lt;password&gt;
+                 &rarr; Nikto (authenticated): /backup.zip found
+                      &rarr; zip2john + john: zip password cracked
+                           &rarr; Joomla DB dump reveals an admin bcrypt hash
+                                &rarr; john cracks it: real admin credentials
+                                     &rarr; Template Editor: PHP shell saved and triggered
+                                          &rarr; www-data shell, lxd group membership spotted
+                                               &rarr; Privileged Alpine LXD container built and started
+                                                    &rarr; Host filesystem mounted inside, root achieved</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>nmap</td><td>Initial service scan, identifies the two web ports' different auth postures</td></tr>
+        <tr><td>gobuster</td><td>Directory brute force against the open port 80 site</td></tr>
+        <tr><td>Hydra</td><td>Brute-forcing the HTTP Basic Auth on port 8080</td></tr>
+        <tr><td>Nikto</td><td>Authenticated scan finding the exposed backup archive</td></tr>
+        <tr><td>zip2john / John the Ripper</td><td>Cracking the zip password, then the bcrypt admin hash inside it</td></tr>
+        <tr><td>Joomla Template Editor</td><td>Built-in authenticated file write, used for the reverse shell</td></tr>
+        <tr><td>lxd-alpine-builder</td><td>Builds a minimal Alpine image for the LXD privilege escalation</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">A locked front door doesn't mean a locked house</div>
+        <p>HTTP Basic Auth protecting every path except a default file like robots.txt was enough to identify the exact CMS running behind it, without ever authenticating.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">An admin panel's legitimate features are often the easiest shell</div>
+        <p>Joomla's Template Editor needed no vulnerability at all, just valid admin credentials and the willingness to paste code into a built-in file editor.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">lxd/lxc group membership should be treated as root</div>
+        <p>This isn't an edge case or a misconfiguration specific to this box, it's how LXD group permissions work by design on most default installs. Any account added to that group for convenience is a root-equivalent account.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via credential cracking and LXD group privilege escalation</footer>
+
+</div>
+</body>
+</html>

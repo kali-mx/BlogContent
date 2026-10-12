@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Year of The Rabbit: a chain of hidden paths to a sudo UID bypass</title>
+  <meta name="description" content="A TryHackMe walkthrough: a CSS comment leaking a hidden page, strings on an image revealing FTP creds, a Brainfuck-encoded credentials file, a note leaking a password, and CVE-2019-14287's sudo UID bypass to root.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Year of The Rabbit: a chain of hidden paths to a sudo UID bypass</h1>
+  <p class="dek">Nothing on this box is reachable directly, every stage hides behind the last: a comment in a stylesheet, a redirect parameter, strings embedded in an image, text run through an esoteric programming language instead of a cipher. The final step is a sudo bug with an actual CVE name.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Year of The Rabbit</span>
+    <span class="pill">Category: Web / Linux Privesc</span>
+    <span class="pill">Tools: Dirbuster, Hydra, Burp Suite</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a web server hiding a trail of nested secrets, each one found inside the last. The job: follow every hidden path to a foothold, then escalate through a known sudo vulnerability to root.</p>
+    <p>Flags are omitted below, as always, the chain itself is the point.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Climb a chain of hidden paths</div>
+          <p>A directory brute force finds <code>/assets</code>, and viewing its source rather than just its rendered page pays off immediately, a comment left inside a stylesheet:</p>
+          <pre><code>/* Nice to see someone checking the stylesheets.
+   Take a look at the page: /sup3r_s3cr3t_fl4g.php */</code></pre>
+          <p>Requesting that page in Burp Suite shows a 302 redirect carrying its own hidden value in the <code>Location</code> header, a second hidden directory token entirely. Visiting that directory lists a single file, downloaded directly:</p>
+          <pre><code>curl "http://&lt;target&gt;/&lt;hidden-token&gt;/Hot_Babe.png" --output hotbabe.png</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Source code, response headers, and redirect targets all carry information a rendered page never shows. Three completely different hiding spots, a code comment, an HTTP header, a directory listing, each only gave something up because they were actually inspected, not just clicked through.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Pull credentials straight out of an image</div>
+          <p><code>strings</code> against the downloaded PNG doesn't just find garbage binary noise, it finds plaintext left inside the file on purpose:</p>
+          <pre><code>strings hotbabe.png</code></pre>
+          <p>The output names an FTP username directly and lists more than a dozen candidate passwords, effectively a small wordlist embedded in an image file.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Image files routinely carry extra bytes beyond their actual pixel data, and <code>strings</code> doesn't care what format a file claims to be, it just reports every printable run of text it finds. A quick strings pass costs nothing and occasionally hands over exactly this.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Brute-force FTP with the embedded wordlist</div>
+          <p>With a username and a short, specific password list in hand, a targeted Hydra run beats guessing blind by a wide margin:</p>
+          <pre><code>hydra ftp://&lt;target&gt; -l ftpuser -P rabbit.txt</code></pre>
+          <p>One valid password comes back, and logging in over FTP lists a single file, <code>Eli's_Creds.txt</code>.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A wordlist of a dozen candidates instead of rockyou's many millions turns a brute force from "hope it finishes" into "basically instant." Finding that list was the real work, the cracking itself was almost a formality.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Decode a Brainfuck-encoded credentials file</div>
+          <p>The downloaded file's contents aren't a hash or a cipher, they're source code in Brainfuck, an esoteric programming language built almost entirely from eight punctuation characters. Running it through an online Brainfuck interpreter instead of trying to hand-trace it decodes it instantly into a second username and password.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Brainfuck isn't encryption and provides no real secrecy, it's obscurity at best. Recognizing the character set (mostly <code>&lt; &gt; + - . [ ]</code>) is the only skill needed, an interpreter does the actual work in seconds.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Follow a message to a hidden directory</div>
+          <p>SSHing in with the decoded credentials surfaces a login-of-the-day message, a note from "Root" to another user mentioning a hidden location named with a leetspeak version of "secret." Searching the filesystem for exactly that finds it:</p>
+          <pre><code>find / -type d -name "*s3cr3t*" 2>/dev/null</code></pre>
+          <p>Inside sits a single oddly-named dotfile. Reading it turns up another note from "Root", this one scolding the next user over a weak password, and naming that password directly in the text of the complaint.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>An MOTD banner is easy to skim past, but on a CTF box it's exactly the kind of place a designed clue gets planted. Following a hint instead of ignoring it as flavor text led directly to a second account's credentials.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Check what the next user can run as root</div>
+          <p>Switching to that account and checking sudo rights shows a narrowly scoped, password-free permission:</p>
+          <pre><code>sudo -l</code></pre>
+          <p>The rule reads <code>(ALL, !root) NOPASSWD: /usr/bin/vi /home/gwendoline/user.txt</code>, meaning this user can run <code>vi</code> on exactly one file, as any user, except root by name.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>vi</code> itself is a well-known sudo privilege-escalation target: once it's running with elevated rights, its own shell-out command spawns a shell with those same rights. The <code>!root</code> exclusion looks like it closes that off entirely, which is exactly what makes it worth testing properly rather than taking at face value.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Bypass the exclusion with CVE-2019-14287</div>
+          <p>Checking the installed sudo version confirms it predates the fix for a real, named vulnerability:</p>
+          <pre><code>sudo -V
+<span class="cm"># Sudo version 1.8.10p3</span></code></pre>
+          <p>CVE-2019-14287 affects exactly this kind of <code>!root</code> exclusion: passing a numeric UID of <code>-1</code> (or its unsigned equivalent) instead of a username causes sudo to resolve it back to UID 0, root, since the exclusion only ever matched the literal name:</p>
+          <pre><code>sudo -u#-1 /usr/bin/vi /home/gwendoline/user.txt</code></pre>
+          <p><code>vi</code> opens running as root. From inside it, shelling out confirms it completely:</p>
+          <pre><code>:!/bin/bash
+whoami
+<span class="cm"># root</span></code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>This is the same class of bug as the UID-wraparound trick elsewhere in this style of misconfiguration, but here it has an actual CVE and a known-fixed version, which is why checking <code>sudo -V</code> before assuming a dead end is worth doing every time a username-based exclusion shows up in <code>sudo -l</code>.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>dirbuster: /assets found
+  &rarr; CSS comment: a hidden PHP page named
+       &rarr; Burp: redirect Location header leaks a hidden directory token
+            &rarr; Image downloaded, strings reveals an FTP user + password list
+                 &rarr; Hydra cracks FTP with that short wordlist
+                      &rarr; Brainfuck-encoded file decoded: a second user's creds
+                           &rarr; SSH login, MOTD hints at a hidden directory
+                                &rarr; find locates it, a note leaks a third password
+                                     &rarr; sudo -l: vi allowed as (ALL, !root)
+                                          &rarr; CVE-2019-14287 (-u#-1): root shell via vi</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>Dirbuster</td><td>Initial directory brute force finding /assets</td></tr>
+        <tr><td>Burp Suite</td><td>Inspecting the redirect response to recover a hidden directory token</td></tr>
+        <tr><td>strings</td><td>Extracting embedded credentials from a downloaded image</td></tr>
+        <tr><td>Hydra</td><td>FTP brute force against the small, targeted password list</td></tr>
+        <tr><td>An online Brainfuck interpreter</td><td>Decoding an esoteric-language-encoded credentials file</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Hidden paths live in places that aren't rendered pages</div>
+        <p>A stylesheet comment and a redirect header both carried real clues here. View-source and a proxy's raw response view matter as much as clicking through the site itself.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A narrow sudo rule still needs its version checked</div>
+        <p><code>(ALL, !root)</code> looks airtight until the sudo version turns out to predate the fix for exactly the bug that breaks it. Reading <code>sudo -l</code> is only half the enumeration, <code>sudo -V</code> is the other half.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Obscurity isn't security, but it isn't nothing either</div>
+        <p>Brainfuck encoding, embedded strings, and leetspeak directory names never stopped a determined search, but each one still slowed things down by a step. None of them were a real control, all of them were worth noticing anyway.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via chained enumeration and CVE-2019-14287</footer>
+
+</div>
+</body>
+</html>

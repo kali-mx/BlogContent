@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Docker Escape: a hidden port, a sudo bypass, and a stray binary</title>
+  <meta name="description" content="A TryHackMe walkthrough: finding a service hidden behind a non-default port, exploiting a sudo misconfiguration, and escaping a container entirely via a leftover docker binary mounting the host filesystem.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Docker Escape: a hidden port, a sudo bypass, and a stray binary</h1>
+  <p class="dek">An SSH login that fails on the obvious port, a second service hiding in the connection table, a sudo rule that allows running as any user except root (which isn't the protection it sounds like), and a leftover docker binary that turns into a straight path out of the container.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Docker Container</span>
+    <span class="pill">Category: Linux Privesc / Containers</span>
+    <span class="pill">Tools: ssh, sudo, docker</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> SSH access with one set of credentials fails outright on the target. The job: find what's actually listening, get in, and climb all the way out of a container to the host.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Find the hidden service</div>
+          <p>SSH to the obvious local address fails outright. Rather than assume the credentials are wrong, checking what's actually listening tells a different story:</p>
+          <pre><code>cat /proc/net/tcp</code></pre>
+          <p>The local address column is hex-encoded (<code>host:port</code>), and alongside the expected listeners sits a second one on a non-default port the earlier SSH attempt never touched.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A failed login on the obvious port doesn't mean the credentials are wrong, it can just mean the real service is elsewhere. <code>/proc/net/tcp</code> shows every listener on the box, including ones a port scan from outside would never see if they're bound to loopback.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Reuse the credentials against the real port</div>
+          <p>The same credentials that failed before work immediately once pointed at the correct port:</p>
+          <pre><code>ssh &lt;user&gt;@127.0.0.1 -p&lt;hidden-port&gt;</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Credentials weren't the problem, the target was. It's worth separating "wrong credentials" from "wrong service" before abandoning a login that looks like it should work.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Exploit a sudo rule that looks safer than it is</div>
+          <p><code>sudo -l</code> shows the logged-in user can run <code>/bin/bash</code> as any user except root, with no password:</p>
+          <pre><code>User &lt;user&gt; may run the following commands:
+    (ALL, !root) NOPASSWD: /bin/bash</code></pre>
+          <p>On sudo versions before 1.8.28 (this one is 1.8.21), that exclusion can be bypassed entirely with a crafted user ID:</p>
+          <pre><code>sudo -u#-1 /bin/bash</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Passing a numeric user ID of <code>-1</code> gets interpreted by older sudo versions as UID <code>0</code>, root, due to how the value wraps during a signed-to-unsigned conversion. The rule technically still says "not root," sudo just doesn't enforce it correctly for that specific input. This is CVE-2019-14287.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Escape the container through a leftover docker binary</div>
+          <p>Root inside this shell is still just root inside a container, not the host. A search turns up a copy of the <code>docker</code> client sitting in a temp directory, along with an existing image:</p>
+          <pre><code>find / -name docker 2&gt;/dev/null
+/tmp/docker images</code></pre>
+          <p>With a docker client and a valid image reachable, mounting the entire host filesystem into a fresh container and chrooting into it is one command:</p>
+          <pre><code>/tmp/docker run -it -v /:/host &lt;image-id&gt; chroot /host/ bash</code></pre>
+          <p>The shell prompt's hostname changes, confirming the new container's root is now the real host filesystem.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A docker client with access to the daemon is effectively root on the host, regardless of which container it's launched from, because a container can be configured to mount any host path, including <code>/</code> itself. Finding a stray client binary with working access is as good as finding a host-level credential.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>SSH fails on the default port
+  &rarr; /proc/net/tcp: a second listener hiding on a non-default port
+       &rarr; same creds, correct port: shell access
+            &rarr; sudo -l: run as any user except root (NOPASSWD)
+                 &rarr; sudo -u#-1 /bin/bash: CVE-2019-14287 bypass, root in-container
+                      &rarr; stray docker client + image found
+                           &rarr; docker run -v /:/host chroot: full host filesystem access</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">An exclusion in a sudo rule isn't a guarantee</div>
+        <p><code>(ALL, !root)</code> reads like a safe boundary, but on an outdated sudo version it's bypassable with a single crafted argument. The version number mattered more than the rule's intent.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A docker client is as sensitive as a root credential</div>
+        <p>Any user who can reach the docker daemon can mount the host filesystem into a container they control. Treat access to the docker socket or client the same way you'd treat a root shell.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via hidden-service discovery and a sudo CVE</footer>
+
+</div>
+</body>
+</html>

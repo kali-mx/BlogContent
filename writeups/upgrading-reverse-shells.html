@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Upgrading a Netcat Shell to a Full TTY</title>
+  <meta name="description" content="A practical reference for upgrading a raw netcat reverse shell into a fully interactive TTY: the python pty.spawn trick, matching terminal size, and fixing TERM/SHELL when the upgrade doesn't go cleanly.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; Tooling Reference</div>
+  <h1>Upgrading a Netcat Shell to a Full TTY</h1>
+  <p class="dek">A raw netcat reverse shell can't handle Ctrl-C, tab completion, or most interactive tools like a real terminal can. A few lines turn it into one.</p>
+
+  <div class="meta-row">
+    <span class="pill">Category: Post-Exploitation</span>
+    <span class="pill">Tools: netcat, python, stty</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>Purpose:</strong> a working sequence for upgrading a bare netcat shell into a fully interactive TTY, including the fixes needed when terminal detection doesn't go smoothly.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Reference</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Spawn a real pty on the target</div>
+          <p>If Python is available on the target, this is the first step:</p>
+          <pre><code>python -c 'import pty;pty.spawn("/bin/bash")'</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A raw netcat connection is just a pipe, it has no concept of a terminal. <code>pty.spawn</code> allocates an actual pseudo-terminal on the target end, which is the prerequisite for everything else here.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Background the session and fix local terminal state</div>
+          <p>Suspend the netcat session with <code>Ctrl-Z</code>, then on the attacker side:</p>
+          <pre><code>stty raw -echo; fg
+reset</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>stty raw -echo</code> stops the local terminal from double-handling input (echoing and line-buffering) now that the remote pty is handling it instead. Backgrounding and foregrounding (<code>fg</code>) with that setting applied is what makes the shell start behaving like a real session, Ctrl-C included.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Match the terminal size</div>
+          <p>Check the local terminal's current dimensions, then set the same values on the remote shell:</p>
+          <pre><code>stty -a
+stty rows &lt;rows&gt; columns &lt;columns&gt;</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Without matching dimensions, full-screen tools (editors, pagers, anything using ncurses) render incorrectly or wrap text unpredictably. This is a cosmetic step, but it's the difference between a usable shell and a frustrating one.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Recover when the upgrade doesn't go cleanly</div>
+          <p>Sometimes <code>reset</code> prompts for a terminal type it doesn't recognize. Answering with <code>xterm-256color</code>, or falling back to plain <code>xterm</code> if that's rejected too, usually resolves it. If the shell still isn't behaving, setting the environment directly helps:</p>
+          <pre><code>export TERM=xterm
+export SHELL=bash</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A shell spawned through a reverse connection doesn't always inherit the environment variables a normal login session would. Setting <code>TERM</code> and <code>SHELL</code> explicitly fills in what a proper login would have set automatically.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; a TTY-upgrade quick-reference</footer>
+
+</div>
+</body>
+</html>

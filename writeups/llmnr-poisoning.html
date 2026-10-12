@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLMNR Poisoning and SMB Relay: catching credentials on the wire</title>
+  <meta name="description" content="A practical reference for LLMNR poisoning with Responder, cracking captured NTLM hashes, and relaying them with ntlmrelayx when SMB signing isn't enforced, plus remediation for each.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; Tooling Reference</div>
+  <h1>LLMNR Poisoning and SMB Relay: catching credentials on the wire</h1>
+  <p class="dek">A single mistyped share name is enough. Active Directory's fallback name resolution will broadcast for help, and anyone listening can answer first.</p>
+
+  <div class="meta-row">
+    <span class="pill">Category: Active Directory</span>
+    <span class="pill">Tools: Responder, hashcat, ntlmrelayx</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>Purpose:</strong> a working reference for intercepting NTLM authentication via LLMNR poisoning, cracking what's captured, and relaying it instead when the target allows it. Demonstrated in a home AD lab (Windows Server and two enterprise clients).</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">Background, In Plain Terms</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">LLMNR</div>
+        <p>Link-Local Multicast Name Resolution, enabled by default in Active Directory, is the fallback a client uses when DNS can't resolve a name. It broadcasts to the local network asking anyone to answer. Nothing verifies who actually answers.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">SMB relay (pass the hash)</div>
+        <p>Rather than cracking a captured hash, it can be forwarded live to another machine as proof of authentication, as long as that machine doesn't require SMB signing and the relayed account has admin rights there.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">The Reference</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Start listening</div>
+          <p>Responder masquerades as whatever share a broadcast is asking for, on the correct interface:</p>
+          <pre><code>ip a
+responder -I eth0 -v</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>LLMNR broadcasts don't verify the responder's identity, Responder just has to answer before (or instead of) the real resource, which it can do passively on the right network segment.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Trigger a lookup and capture the hash</div>
+          <p>Any mistyped share, starting with a double backslash and ending in a single one, triggers an LLMNR broadcast on failure. Responder answers, and the client authenticates straight to it, handing over an NTLMv2 hash in the process.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>This isn't a contrived scenario, it's exactly what happens in a large organization when someone fat-fingers a share path or a stale login script points somewhere that no longer exists. LLMNR fires on any DNS failure, typo or not.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Identify and crack the hash</div>
+          <p><code>nth</code> (name-that-hash) identifies the format and, usefully, tells you which hashcat and John modes to use:</p>
+          <pre><code>nth -t '&lt;captured hash&gt;'
+hashcat -O -m 5600 hash.txt /usr/share/wordlists/rockyou.txt</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>NTLMv2 cracking is dictionary-dependent, a weak or reused password falls quickly, but a strong one won't crack at all against a wordlist. That's exactly why the relay path below matters as a second option.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Check if relaying is viable instead of cracking</div>
+          <p>Relaying needs SMB signing to be disabled on the target. Nmap checks this directly:</p>
+          <pre><code>nmap --script=smb2-security-mode.nse -p445 &lt;subnet&gt; | grep "smb2-security-mode" -A2 -B8</code></pre>
+          <p>A domain controller locked down with signing enforced doesn't rule this out entirely, individual workstations on the same network often aren't configured as strictly.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>SMB signing cryptographically verifies the sender of each SMB packet, which breaks a relay attack outright. Checking signing status per-host before attempting a relay saves time against hosts where it simply won't work.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Relay the hash instead of cracking it</div>
+          <p>With SMB and HTTP disabled in Responder's own config (so it only poisons, not competes with the relay), <code>ntlmrelayx</code> forwards captured authentication live to a target from the signing-disabled list:</p>
+          <pre><code>ntlmrelayx.py -tf targets.txt -smb2support</code></pre>
+          <p>If the relayed account has local admin rights on that target, an interactive session is one flag away:</p>
+          <pre><code>ntlmrelayx.py -tf targets.txt -smb2support -i</code></pre>
+          <p>Connecting to the resulting local port with netcat drops into a functional shell-like interface, supporting file upload/download and most Windows commands directly.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A relayed hash proves authentication without ever needing the plaintext password, and it works regardless of password strength, since nothing gets cracked. Signing is the only thing standing between a captured hash and a live session.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Remediation</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Control</th><th>Trade-off</th></tr>
+        <tr><td>Disable LLMNR</td><td>Closes the attack outright; enforce via GPO where DNS already covers name resolution</td></tr>
+        <tr><td>Require SMB signing on all devices</td><td>Stops relay attacks; roughly 15% file-copy performance cost</td></tr>
+        <tr><td>Disable NTLM authentication</td><td>Removes the fallback entirely; Kerberos failures then have no fallback either</td></tr>
+        <tr><td>Account tiering</td><td>Limits blast radius of any one compromised credential; harder to enforce consistently</td></tr>
+        <tr><td>Restrict local admin rights</td><td>Blocks most lateral movement via relay; more service-desk overhead</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>Homelab research &middot; credits to TCM Security's PEH course for the lab setup</footer>
+
+</div>
+</body>
+</html>

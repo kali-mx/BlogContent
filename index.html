@@ -18,6 +18,54 @@
   <section>
     <h2 class="section-title">Latest</h2>
     <div class="writeup-list">
+      <a class="writeup-card" href="writeups/dawn2-bof.html">
+        <div class="wc-title">Dawn2: a classic stack buffer overflow, twice</div>
+        <div class="wc-dek">Fuzzing a leaked custom server binary into a full stack-based buffer overflow: finding the offset, clearing bad characters, locating a jmp esp, and weaponizing it with msfvenom, twice over for user and root.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Binary Exploitation</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/docker-escape.html">
+        <div class="wc-title">Docker Escape: a hidden port, a sudo bypass, and a stray binary</div>
+        <div class="wc-dek">Finding a service hidden behind a non-default port, bypassing a sudo rule with CVE-2019-14287, and escaping a container entirely via a leftover docker binary mounting the host filesystem.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Linux Privesc / Containers</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/llmnr-poisoning.html">
+        <div class="wc-title">LLMNR Poisoning and SMB Relay: catching credentials on the wire</div>
+        <div class="wc-dek">Intercepting NTLM authentication with Responder, cracking what's captured, and relaying it live with ntlmrelayx when SMB signing isn't enforced, plus remediation for each.</div>
+        <div class="wc-meta">
+          <span class="pill">Tooling Reference</span>
+          <span class="pill">Active Directory</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/honeypot-recon.html">
+        <div class="wc-title">Running a Honeypot: what internet scanners actually try</div>
+        <div class="wc-dek">Standing up a deliberately vulnerable honeypot and watching what automated internet scanners actually send: Ghostcat probes, EternalBlue checks, and FTP credential sprays.</div>
+        <div class="wc-meta">
+          <span class="pill">Homelab Research</span>
+          <span class="pill">Threat Intel</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/upgrading-reverse-shells.html">
+        <div class="wc-title">Upgrading a Netcat Shell to a Full TTY</div>
+        <div class="wc-dek">The python pty.spawn trick, matching terminal size, and fixing TERM/SHELL when a raw netcat reverse shell needs to behave like a real terminal.</div>
+        <div class="wc-meta">
+          <span class="pill">Tooling Reference</span>
+          <span class="pill">Post-Exploitation</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/powershell-post-exploitation.html">
+        <div class="wc-title">PowerShell for Post-Exploitation: enumerating a Windows host</div>
+        <div class="wc-dek">The PowerShell cmdlets that cover what grep, find, and cat do on Linux: scheduled tasks, odd file extensions, file content search, and local groups.</div>
+        <div class="wc-meta">
+          <span class="pill">Tooling Reference</span>
+          <span class="pill">Windows / PowerShell</span>
+        </div>
+      </a>
       <a class="writeup-card" href="writeups/matrix-exit-denied.html">
         <div class="wc-title">Matrix: Exit Denied, a forum, a cipher chain, and four flags</div>
         <div class="wc-dek">Forum OSINT into a credential spray, a three-layer cipher puzzle, a hijacked session cookie, a clock-synced TOTP brute force, and a SUID pandoc binary escalating all the way to root.</div>

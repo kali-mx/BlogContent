@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Running a Honeypot: what internet scanners actually try</title>
+  <meta name="description" content="Standing up a deliberately vulnerable honeypot and watching what automated internet scanners actually send: Apache Jserv probes, EternalBlue checks, FTP credential sprays, and more.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; Homelab Research</div>
+  <h1>Running a Honeypot: what internet scanners actually try</h1>
+  <p class="dek">Stand up a box that looks like a juicy, misconfigured target, point it at the open internet, and watch what shows up. The results are less "sophisticated APT" and more automated scanners running the same handful of exploit checks on repeat.</p>
+
+  <div class="meta-row">
+    <span class="pill">Category: Honeypot / Threat Intel</span>
+    <span class="pill">Tools: Shodan, nmap, Metasploit</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a deliberately exposed host advertising a wide, deliberately vulnerable-looking service footprint (SMBv1, old Apache Tomcat, exposed databases, an Elasticsearch honeypot, and more), left running to see what automated internet-wide scanning actually looks like in practice.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Confirm what the box is already advertising</div>
+          <p>A Shodan lookup on the honeypot's own IP shows what the rest of the internet already sees before any traffic analysis even starts: close to 400 open ports, flagged with known CVEs like the SMBv1 remote code execution bug and the Exim mail server vulnerability, across a huge mix of services, SSH, mail, RDP, databases, VNC, and an industrial SCADA protocol among them.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Shodan indexes the whole internet continuously, so checking your own exposure through it shows exactly what an opportunistic attacker's reconnaissance would show, no active scanning required on your part.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Watch automated exploit probes arrive</div>
+          <p>Traffic logs on the honeypot's web-facing services show automated tooling testing for specific, well-known vulnerabilities, not manual exploration. A probe against the Apache Tomcat AJP connector tests for the Ghostcat file-read vulnerability (<code>CVE-2020-1938</code>):</p>
+          <pre><code>python2 ghost.py &lt;target&gt;
+Getting resource at ajp13://&lt;target&gt;:8009/asdf</code></pre>
+          <p>A separate Metasploit module checks the SMB service for EternalBlue (<code>MS17-010</code>), and an FTP brute-force script works through a list of common default credentials, several of which succeed against the deliberately weak honeypot logins.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>None of this traffic is targeted, it's the same small set of high-value, well-known CVE checks that automated scanners run against every IP they encounter. A honeypot makes that background noise visible instead of invisible.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Confirm the deliberately weak services actually get found</div>
+          <p>The honeypot's SMB service reports authentication disabled and SMBv1 enabled, with shares openly listed. Its fake Elasticsearch honeypot, ElasticHoney, a tool specifically designed to catch Elasticsearch RCE attempts, shows the same pattern: automated scanners test it exactly as they would a real misconfigured instance.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A deliberately weak service doesn't need to wait long to get probed. Within the observation window here, every exposed, misconfigured-looking service attracted automated attention, confirming that default-credential and legacy-protocol exposure really is scanned for continuously, not theoretically.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Internet-facing exposure gets found fast</div>
+        <p>Every deliberately weak service on this honeypot was probed by automated tooling, not eventually, but as part of routine, continuous internet-wide scanning. There's no "too small to be a target."</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Scanners check specific, well-known CVEs, not zero-days</div>
+        <p>The actual observed traffic was Ghostcat, EternalBlue, and default-credential checks, all old, well-documented vulnerabilities. Patching known issues promptly defeats the overwhelming majority of opportunistic scanning.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A honeypot is a cheap, direct threat-intel source</div>
+        <p>Rather than reading about what attackers are doing, a honeypot shows it directly: the exact services, exact exploit checks, and exact credential lists currently in active use against exposed infrastructure.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>Homelab research &middot; honeypot traffic analysis</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hacker of the Hill: three boxes, three different footholds</title>
+  <meta name="description" content="A TryHackMe Hacker of the Hill walkthrough across all three difficulty tiers: a CMS-to-cron privilege escalation, an AD pass-the-hash to SYSTEM, and a leaked session hash leading to a second, forgotten SSH port.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Hacker of the Hill: three boxes, three different footholds</h1>
+  <p class="dek">One room, three independent machines at increasing difficulty, and three completely different ways in: a CMS edit page that executes PHP it was never meant to, an Active Directory domain cracked with a weak RDP password, and a leaked session hash that only pays off once you notice the second, easy-to-miss SSH port.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Hacker of the Hill</span>
+    <span class="pill">Category: Multi-host / Mixed</span>
+    <span class="pill">Tools: Hydra, mimikatz, gobuster, CrackStation</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> three separate targets, Easy, Medium, and Hard, each its own box with its own services and its own path to root or SYSTEM. No shared foothold between them, each one has to be enumerated from scratch.</p>
+    <p>No single flag in these notes, each tier's objective is full compromise of that machine.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">Easy: a CMS, a PHP sandbox, and a cron job</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Find the hidden login through robots.txt</div>
+          <p>An nmap scan turns up three separate web apps on adjacent ports. The first one's <code>robots.txt</code> disallows a directory it was clearly trying to hide: <code>/vbcms</code>, which resolves to a "Very Basic CMS" login page.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>robots.txt</code> is a request not to index a path, not an access control. It's one of the most reliable places to find a path an application owner considered sensitive enough to hide from search engines but forgot still needs real authentication.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Brute-force the login, then turn the editor into a shell</div>
+          <p>Inspecting the login form in the browser's network tab shows it's a plain POST with <code>username</code>/<code>password</code> fields, enough to build a Hydra command. It cracks a default-looking credential pair in seconds. Logged in, the CMS lets pages be edited directly, and since the pages are plain HTML served by an Apache instance that also runs PHP, pasting in a PHP reverse shell and saving the page gets it executed on save.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A content editor that writes files into a path the web server executes is remote code execution by design, whether or not the application intended "page content" to mean "arbitrary PHP." Weak default credentials are what makes that reachable at all.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Spot the pivot you can't take yet</div>
+          <p>From the first foothold, <code>linpeas</code> finds a cron job firing every minute, owned by root but pointing at a script that belongs to a different, so-far-uncompromised user.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A root cron job touching a file some other user owns is a privilege escalation path waiting on one missing piece: control of that other account. Finding it early means the rest of the box is just working out how to reach that specific user.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">A "learn to code" site turns out to execute real PHP</div>
+          <p>The third web app is an interactive PHP tutorial site, type code into a box, click a button, and it runs server-side and shows the output. Testing it with <code>system('id')</code> confirms it executes as exactly the user the cron job needs. Pasting in the same reverse shell payload and submitting it gets an interactive shell as that user directly.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Any "try it live" code execution feature is a sandboxed shell by definition, the only open question is how well it's actually sandboxed. Here, not well at all, it ran as a real, useful system user rather than a throwaway container account.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Hijack the cron job for root</div>
+          <p>With that user's access, the cron-executed script becomes writable. Overwriting it to set the SUID bit on <code>/bin/bash</code>, waiting one minute for the cron to fire as root, then running <code>/bin/bash -p</code> lands a root shell.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A cron job is just code that runs with someone else's privileges on a timer. If an attacker can edit what it runs, they've effectively scheduled their own command to execute as root, no exploit required beyond file permissions.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Medium: Active Directory, a weak RDP password, and pass-the-hash</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Enumerate the domain and its users</div>
+          <p>Kerberos, LDAP, and RDP all open on a Windows host name the domain outright. A handful of usernames come back from user enumeration, ordinary-looking employee accounts alongside Administrator.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Same pattern as any Active Directory target: the open ports name the domain before a single authenticated request, and valid usernames are usually the cheapest thing to enumerate next.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Brute-force one account's RDP password</div>
+          <p>Rather than guess which account might be weak, Hydra runs a password-spray against one user's RDP login with a common wordlist and recovers a working password in minutes.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>In a domain with several human user accounts, only one needs a weak, wordlist-guessable password for the whole enumeration effort to pay off. RDP in particular rarely has the same lockout tuning a web login does.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Pass-the-hash to Administrator with mimikatz</div>
+          <p>Once inside via RDP, dropping <code>mimikatz.exe</code> and running three commands in sequence, elevate the current token, dump local SAM secrets, then pass Administrator's NTLM hash directly, authenticates as Administrator without ever needing the plaintext password.</p>
+          <pre><code>token::elevate
+lsadump::sam sam.reg system.reg
+sekurlsa::pth /user:Administrator /domain:&lt;dc&gt; /ntlm:&lt;hash&gt;</code></pre>
+          <p>That lands an <code>nt authority\system</code> shell.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Same principle as any pass-the-hash chain: once an NTLM hash is recovered, Windows authentication accepts it in place of a password. One weak RDP credential was the only thing standing between an external attacker and a path straight to SYSTEM.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Hard: a leaked session hash and a second SSH port</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Map a wide, mismatched set of services</div>
+          <p>Seven open ports across two SSH services, three different web servers (two Apache instances with different content, one nginx), and a Python Werkzeug app with no visible title at all. Nothing here announces its purpose up front, every service needs its own look.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A box exposing this many near-identical-looking services is usually hiding the real way in behind the one that looks least interesting. Treating every port as equally worth enumerating, rather than fixating on the obvious web app, is what this tier is actually testing.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Find an API that leaks its own session hash</div>
+          <p>Directory brute-forcing one of the web apps surfaces an undocumented <code>/api/user</code> path with <code>/login</code> and <code>/session</code> endpoints. Querying the session endpoint directly, no authentication required, returns an active admin session object containing a raw password hash. A quick lookup against an online rainbow-table service cracks it instantly, it's a well-known, extremely common hash.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>An API endpoint that returns session data without checking whether the caller is authorized to see it is an authorization bug, not an authentication one, the request itself doesn't need credentials to leak someone else's. And any hash common enough to be precomputed in a public rainbow table might as well be plaintext.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Pull credentials from a second, separate app</div>
+          <p>The Werkzeug app on another port turns out to be a simple application launcher with its own API. Enumerating its endpoints the same way, first an <code>/apps</code> listing, then following the pattern to a <code>/users</code> endpoint, returns a username and password pair in plain JSON.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Internal-looking admin tools often assume no one outside the team will ever enumerate their API surface, so they skip authentication on "harmless" endpoints like a user directory. That assumption is exactly what directory brute-forcing and endpoint guessing are built to break.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">The obvious SSH port is a dead end, the second one isn't</div>
+          <p>The leaked username refuses password authentication on the standard SSH port, key-only. But a second SSH service is listening on a nonstandard port, and it accepts the same leaked password without complaint, landing a shell.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Running two SSH daemons with different auth policies on the same host is a common, often accidental misconfiguration, a hardened service on the expected port next to a forgotten, more permissive one on an alternate port. Credentials that fail against the obvious target are worth retrying against every other instance of the same service before being written off.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>nmap</td><td>Service discovery across all three targets</td></tr>
+        <tr><td>gobuster</td><td>Directory and API endpoint brute-forcing</td></tr>
+        <tr><td>Hydra</td><td>CMS login and RDP password brute-forcing</td></tr>
+        <tr><td>pentestmonkey PHP reverse shell</td><td>Foothold payload on the Easy box's two separate RCE vectors</td></tr>
+        <tr><td>mimikatz</td><td>Token elevation, SAM dump, and pass-the-hash on the Medium box</td></tr>
+        <tr><td>CrackStation</td><td>Fast lookup of a common, precomputed password hash</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Content editors are RCE if the server executes what they write</div>
+        <p>Both Easy-box footholds came from the same pattern: a feature designed to let users submit content, running on a server that doesn't distinguish "content" from "code."</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">One weak password anywhere undoes the rest of the hardening</div>
+        <p>The Medium box's entire chain, up to a SYSTEM shell, traced back to a single RDP account with a wordlist-guessable password.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">The forgotten second instance of a service is often the real door</div>
+        <p>A second SSH daemon on a nonstandard port, with looser auth, undid whatever hardening the "real" SSH port had. Enumerate every instance of a service, not just the expected one.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; three machines, three distinct attack paths</footer>
+
+</div>
+</body>
+</html>

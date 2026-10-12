@@ -21,7 +21,7 @@
   </div>
 
   <div class="brief">
-    <p><strong>Purpose:</strong> a consolidated reference for the John the Ripper techniques that come up repeatedly: format identification, Linux credential unshadowing, archive and SSH key cracking, and custom rule-based mangling.</p>
+    <p><strong>Purpose:</strong> a consolidated reference for the John the Ripper techniques that come up repeatedly: format identification, Linux credential unshadowing, single-crack mode, archive and SSH key cracking, and custom rule-based mangling.</p>
   </div>
 
   <section>
@@ -31,9 +31,14 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Identify the hash before guessing a mode</div>
-          <p>Before cracking anything, confirm what format it actually is:</p>
-          <pre><code>hashid '&lt;hash string&gt;'</code></pre>
+          <div class="step-title">Identify the hash before guessing a mode, then crack it</div>
+          <p><code>hashid</code> narrows down the hash type before wasting a run on the wrong format:</p>
+          <pre><code>hashid hash1.txt
+--File 'hash1.txt'--
+Analyzing '2e728dd31fb5949bc39cac5a9f066498'
+[+] MD2</code></pre>
+          <p>With the format known, John runs against it directly:</p>
+          <pre><code>john --format=raw-md5 --wordlist=/usr/share/wordlists/rockyou.txt hash1.txt</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>John supports dozens of formats, and guessing wrong wastes time running the wrong attack against a hash it will never crack. A ten-second identification step avoids that entirely.</p>
@@ -45,12 +50,16 @@
         <div class="step-num">2</div>
         <div class="step-body">
           <div class="step-title">Unshadow Linux passwd/shadow pairs</div>
-          <p>A raw <code>/etc/shadow</code> file isn't directly crackable on its own, it needs merging with <code>/etc/passwd</code> first:</p>
-          <pre><code>unshadow passwd.txt shadow.txt &gt; combined.txt
-john combined.txt --wordlist=/usr/share/wordlists/rockyou.txt</code></pre>
+          <p>A raw <code>/etc/shadow</code> entry isn't directly crackable on its own, it needs merging with the matching <code>/etc/passwd</code> line first. Built from copied file contents:</p>
+          <pre><code>echo root:x:0:0::root:/bin/bash > ~/Downloads/lesson/passwd
+echo 'root:$6$Ha.d5nGupBm29pYr$yugXSk24ZljLTAZZagtGwpSQhb3F2DOJtnHrvk7HI2ma4GsuioHp8sm3LJiRJpKfIf7lZQ29qgtH17Q/JDpYM/:18576:::::' > shadow
+
+unshadow passwd shadow > unshad
+
+john unshad --wordlist=/usr/share/wordlists/rockyou.txt</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p><code>shadow</code> holds the hashes, <code>passwd</code> holds the usernames and UIDs that map to them, John needs both joined together in one file to know which hash belongs to which account.</p>
+            <p><code>shadow</code> holds the hash, <code>passwd</code> holds the username and UID it maps to, and John needs both joined into one file to know which hash belongs to which account.</p>
           </div>
         </div>
       </div>
@@ -59,11 +68,16 @@ john combined.txt --wordlist=/usr/share/wordlists/rockyou.txt</code></pre>
         <div class="step-num">3</div>
         <div class="step-body">
           <div class="step-title">Try single-crack mode before a full wordlist</div>
-          <p>John's single-crack mode generates guesses from the username and any available GECOS field data (full name, etc.) in the password file itself, no external wordlist required:</p>
-          <pre><code>john --single --format=&lt;format&gt; combined.txt</code></pre>
+          <p>Single-crack mode generates guesses from the username (and any GECOS field data) already present in the file, no external wordlist required. It needs the hash prefixed with its username first:</p>
+          <pre><code># from:
+1efee03cdcb96d90ad48ccc7b8666033
+# to:
+mike:1efee03cdcb96d90ad48ccc7b8666033
+
+john --single --format=md5 hash.txt</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>People reuse their own name, username, or small variations of it as passwords constantly. Single-crack mode catches this class of weak password almost instantly, before paying the cost of a full wordlist run.</p>
+            <p>People reuse their own name or username as a password constantly. Single-crack mode catches this class of weak password almost instantly, before paying the cost of a full wordlist run.</p>
           </div>
         </div>
       </div>
@@ -71,15 +85,28 @@ john combined.txt --wordlist=/usr/share/wordlists/rockyou.txt</code></pre>
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Crack password-protected archives and SSH keys</div>
-          <p>John's companion scripts convert common container formats into a crackable hash first:</p>
-          <pre><code>zip2john protected.zip &gt; zip.hash
-rar2john protected.rar &gt; rar.hash
-ssh2john id_rsa &gt; ssh.hash
-john --wordlist=/usr/share/wordlists/rockyou.txt zip.hash</code></pre>
+          <div class="step-title">Crack password-protected zip, rar, and SSH key files</div>
+          <p>Each container format gets its own converter script that extracts a John-readable hash first:</p>
+          <pre><code># zip
+zip2john zipfile.zip > zip_hash.txt
+john --wordlist=/usr/share/wordlists/rockyou.txt zip_hash.txt
+
+# rar
+rar2john rarfile.rar > rar_hash.txt
+john --wordlist=/usr/share/wordlists/rockyou.txt rar_hash.txt
+
+# once cracked, extract with the recovered password:
+unrar x -ppassword rar
+Extracting from rar
+Extracting  flag.txt    OK
+All OK
+
+# ssh private key
+sudo python /usr/share/john/ssh2john.py id_rsa > idjohn
+john --wordlist=/usr/share/wordlists/rockyou.txt idjohn</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A zip, rar, or encrypted SSH private key isn't a "hash" in the usual sense, these helper scripts extract the specific data John needs to brute-force the passphrase protecting the container, in a format John's core engine understands.</p>
+            <p>A zip, rar, or encrypted SSH private key isn't a "hash" in the usual sense. These helper scripts extract the specific data John needs to brute-force the passphrase protecting the container, in a format John's core engine understands.</p>
           </div>
         </div>
       </div>
@@ -87,15 +114,28 @@ john --wordlist=/usr/share/wordlists/rockyou.txt zip.hash</code></pre>
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Write custom mangling rules for a smarter wordlist</div>
-          <p>Plain wordlists miss predictable variations, a capitalized first letter, a trailing year, a leetspeak substitution. John's rule engine in <code>john.conf</code> generates those variations from a base wordlist without manually writing out every permutation:</p>
-          <pre><code>[List.Rules:Custom]
-c $[0-9] $[0-9]
+          <div class="step-title">Write a custom mangling rule, then crack with it</div>
+          <p>Plain wordlists miss predictable variations, like a trailing two-digit number. A new rule block added to <code>/etc/john/john.conf</code>:</p>
+          <pre><code>[List.Rules:THM01]
+$[0-9]$[0-9]</code></pre>
+          <p>Run against a common-password list with that rule applied:</p>
+          <pre><code>john hash.txt --format=raw-sha1 --wordlist=/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt --rules=THM01
 
-john --wordlist=base.txt --rules=Custom combined.txt</code></pre>
+1g 0:00:00:00 DONE (2021-07-21 15:41) 25.00g/s 14133Kp/s 14133Kc/s 14133KC/s hotrats56..modena56
+
+john hash.txt --show
+?:moonligh56
+1 password hash cracked, 0 left</code></pre>
+          <p>A second rule, built after pulling a list of common first names from GitHub, mangles with trailing digits and punctuation instead:</p>
+          <pre><code>[List.Rules:THM_Advise1]
+c$1$2$3$4$[$%&*-_+=#@~!]</code></pre>
+          <pre><code>john hash.txt --format=raw-md5 --wordlist=/usr/share/seclists/Usernames/Names/malenames-usa-top1000.txt --rules=THM_Advise1
+
+Zachariah1234*   (?)
+1g 0:00:00:00 DONE (2021-07-23 12:00) 100.0g/s 409600p/s 409600c/s 409600C/s Valentin1234*..Chris1234+</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Most real-world weak passwords aren't raw dictionary words, they're a dictionary word plus a predictable tweak. A well-written rule set covers far more realistic password space per wordlist entry than brute-forcing character by character ever could.</p>
+            <p>Most real-world weak passwords aren't raw dictionary words, they're a name or word plus a predictable tweak (a couple of digits, a symbol). A well-written rule set covers far more realistic password space per wordlist entry than brute-forcing character by character ever could, and swapping the base wordlist (a name list instead of a password list) targets a different weak-password habit entirely.</p>
           </div>
         </div>
       </div>

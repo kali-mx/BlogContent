@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Upload Vulnerabilities: a GIF polyglot that got past a content filter</title>
+  <meta name="description" content="A TryHackMe file-upload walkthrough: a mangled-extension bypass gets caught, then forging a GIF's magic bytes onto a working PHP reverse shell sails straight through a content-based filter.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Upload Vulnerabilities: a GIF polyglot that got past a content filter</h1>
+  <p class="dek">A file-upload filter checks more than its error message lets on. One extension-mangling trick gets caught immediately. A different approach, forging a GIF's magic bytes onto a working PHP shell, sails straight through.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Upload Vulnerabilities</span>
+    <span class="pill">Category: Web / File Upload</span>
+    <span class="pill">Tools: gobuster, hexedit, curl</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a series of small labs, each fronted by a different upload filter testing a different bypass technique. The job: work out what each filter actually checks, extension, content, or both, and craft an upload that gets past it.</p>
+    <p>No flag appears in these notes, the two filters themselves are the interesting part.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Find where uploads actually land</div>
+          <p>Before testing any bypass, it's worth knowing where a successful upload gets saved. Directory brute-forcing against the first lab turns up a hidden path:</p>
+          <pre><code>gobuster dir -u annex.uploadvulns.thm -w directory-list-2.3-medium.txt -t 200 -z</code></pre>
+          <p><code>/privacy</code> comes back, and it's where uploaded files are actually stored and served from.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>An upload form rarely tells you the save path in its own UI. Finding it first means every later upload attempt can be checked for success by just requesting the resulting URL directly, instead of guessing.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Try mangling the extension, and watch it fail</div>
+          <p>A common first bypass attempt against extension filters is a double extension with mixed case, something like <code>revshell.png.pHp</code>, hoping a naive filter only checks the first extension or does a case-sensitive match on the second. This filter accepts the upload onto disk, but requesting it back just returns a broken-image error, the server never executes it as PHP.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Accepting a file and executing it are two separate decisions. This filter's extension check runs case-insensitively against the real final extension regardless of what comes before it, so casing tricks and extra extensions don't help. A failed bypass here is still useful information: it rules out "this is just a sloppy extension check."</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Switch to a filter that checks content, not just the name</div>
+          <p>A second lab, enumerated the same way, turns out to validate the uploaded file's actual bytes rather than (or in addition to) its extension:</p>
+          <pre><code>gobuster dir -u magic.uploadvulns.thm -t 200 -w directory-list-2.3-medium.txt -z</code></pre>
+          <p>This one checks for a recognizable file signature, commonly called "magic numbers", at the start of the upload before accepting it.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Checking a file's content signature is a real step up from an extension check, it can't be fooled by renaming. But it's still only checking the first few bytes, not the whole file, which leaves an opening.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Forge the magic bytes onto a working shell</div>
+          <p>A GIF file's signature is the first six bytes, <code>47 49 46 38 37 61</code>, which spells out the ASCII string <code>GIF87a</code>. Prepending those exact six characters to the top of a working PHP reverse shell, then confirming the raw bytes in a hex editor, turns the file into something that passes a GIF signature check while still being entirely valid, executable PHP from that point onward:</p>
+          <pre><code>00000000  47 49 46 38 37 61 3c 3f  GIF87a&lt;?
+00000008  70 68 70 0a 2f 2f 20 70  php.// p</code></pre>
+          <p>The filename keeps its real <code>.php</code> extension throughout, only the leading bytes change.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>This is a polyglot file: valid as a GIF for exactly six bytes, and valid PHP for everything after. A magic-number check that only inspects the header has no way to know the rest of the file doesn't match, and the web server doesn't care what the content looks like, only that the extension says PHP.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Upload it and trigger the shell</div>
+          <p>The upload form accepts the file without complaint. With a listener running, requesting the uploaded file directly executes it:</p>
+          <pre><code>nc -lvnp 53
+curl http://magic.uploadvulns.thm/graphics/yrevshell.php</code></pre>
+          <p>The listener catches a connection back as <code>www-data</code>, a working shell from a file that started life pretending to be a picture.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The content filter's job ends the moment it decides to accept the upload. Whether that file later gets executed as a script is a completely separate server configuration question, and on this box, the upload directory runs PHP just like anywhere else.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>gobuster</td><td>Finding the upload directories and other hidden paths on each lab</td></tr>
+        <tr><td>hexedit</td><td>Editing the raw bytes of the shell file to forge a GIF signature</td></tr>
+        <tr><td>curl</td><td>Testing uploads and triggering the executed shell directly</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Extension filters and content filters are different controls</div>
+        <p>Renaming or re-casing a filename only defeats a filter that's actually looking at the filename. A filter enforcing the real extension server-side, regardless of what's stacked in front of it, isn't fooled by that trick at all.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A magic-number check isn't full content validation</div>
+        <p>Checking the first several bytes for a known file signature stops naive renaming attacks, but says nothing about what the rest of the file contains. A polyglot satisfies the check and carries a second, entirely different payload right behind it.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">The real fix is execution, not detection</div>
+        <p>No upload filter, however good, fully closes this hole on its own. The upload directory executing PHP at all is the other half of the vulnerability, serving uploads from a location with script execution disabled would have stopped this chain regardless of what bypassed the content check.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via file-signature spoofing</footer>
+
+</div>
+</body>
+</html>

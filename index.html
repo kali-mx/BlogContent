@@ -18,6 +18,38 @@
   <section>
     <h2 class="section-title">Latest</h2>
     <div class="writeup-list">
+      <a class="writeup-card" href="writeups/year-of-the-jellyfish.html">
+        <div class="wc-title">Year of The Jellyfish: an n-day web exploit chain to a sudo UID bypass</div>
+        <div class="wc-dek">Defeating a WAF exploit signature, finding an upload content filter's blind spot, staging tools over git on a crude shell, a snapd privesc CVE, and a sudo UID-wraparound bypass to root.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / Linux Privesc</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/wordpress-cve-2021-29447.html">
+        <div class="wc-title">WordPress CVE-2021-29447: a blind XXE from a crafted WAV file to a shell</div>
+        <div class="wc-dek">A media-library WAV upload triggers a blind out-of-band XXE file read, leaking wp-config.php credentials, cracking a phpass hash, and a theme-upload validation bypass to a reverse shell.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / XXE</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/upload-vulnerabilities.html">
+        <div class="wc-title">Upload Vulnerabilities: a GIF polyglot that got past a content filter</div>
+        <div class="wc-dek">An extension-mangling bypass gets caught immediately. Forging a GIF's magic bytes onto a working PHP shell sails straight through a content-based filter instead.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / File Upload</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/superspam.html">
+        <div class="wc-title">SuperSpam: from a leaked WiFi capture to a root VNC password</div>
+        <div class="wc-dek">Anonymous FTP leaks a wireless capture, cracking it unlocks a CMS admin panel, and the attacker's own XOR key-reuse mistake leads to a decrypted root VNC password.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / Linux Privesc</span>
+        </div>
+      </a>
       <a class="writeup-card" href="writeups/dawn2-bof.html">
         <div class="wc-title">Dawn2: a classic stack buffer overflow, twice</div>
         <div class="wc-dek">Fuzzing a leaked custom server binary into a full stack-based buffer overflow: finding the offset, clearing bad characters, locating a jmp esp, and weaponizing it with msfvenom, twice over for user and root.</div>

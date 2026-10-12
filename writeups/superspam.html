@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SuperSpam: from a leaked WiFi capture to a root VNC password</title>
+  <meta name="description" content="A TryHackMe walkthrough: anonymous FTP leaking a wireless packet capture, cracking it to pivot into a CMS admin panel, a PHP webshell, an attacker's own XOR key-reuse mistake, and a decrypted root VNC password.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>SuperSpam: from a leaked WiFi capture to a root VNC password</h1>
+  <p class="dek">An anonymous FTP login hands over a wireless packet capture. Cracking it unlocks a CMS admin panel, a CMS admin panel unlocks code execution, and a trail of the attacker's own sloppy encryption leads all the way to a decrypted root VNC password.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: SuperSpam</span>
+    <span class="pill">Category: Web / Linux Privesc</span>
+    <span class="pill">Tools: aircrack-ng, LinPEAS, vncpwd, CyberChef</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a box exposes HTTP, SSH, anonymous FTP, VNC, and X11. Nothing requires exploitation to get started, the anonymous FTP login alone hands over the first real lead.</p>
+    <p>The flag itself is omitted below, the chain to reach it is the point.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Scan, then just log in</div>
+          <p>A service scan turns up HTTP, a non-standard SSH port, FTP, VNC, and X11:</p>
+          <pre><code>nmap -sV -sC 10.10.36.244</code></pre>
+          <p>The FTP server allows anonymous login outright. No credentials needed, just the username <code>anonymous</code> and any password. Inside sits a <code>.cap</code> file and a note.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Anonymous FTP is a decades-old misconfiguration that's still worth checking first on any box that has the port open. It costs nothing to try and sometimes, like here, it hands over the entire first stage of the attack.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Crack the wireless capture</div>
+          <p>Opening the <code>.cap</code> file in Wireshark confirms it's an 802.11 wireless capture, which means it might contain a crackable WPA handshake:</p>
+          <pre><code>aircrack-ng -w /usr/share/wordlists/rockyou.txt SamsNetwork.cap</code></pre>
+          <p>A dictionary attack against the handshake recovers the network's passphrase in well under ten minutes.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A WPA handshake captured off the air is only as strong as the passphrase behind it. Against a dictionary-weak password, cracking it offline is fast, and the password itself often gets reused somewhere else entirely, which is exactly what happens next.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Reuse the password against a CMS login</div>
+          <p>The site on port 80 is running concrete5, with a blog listing posts from four different author accounts. Trying the cracked WiFi passphrase against each of the four usernames in turn finds the one that reuses it, logging straight into the CMS admin dashboard.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Password reuse across completely unrelated systems, a home WiFi network and a CMS login, is one of the most reliable pivots in any assessment. Once you have one real password, trying it everywhere costs almost nothing.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Turn admin access into code execution</div>
+          <p>concrete5's System &amp; Settings panel has an Allowed File Types list that, by default, blocks executable uploads. Adding <code>php</code> to that list and saving removes the one thing stopping a webshell upload.</p>
+          <p>From there, the File Manager accepts a PHP reverse shell (the PentestMonkey shell works fine) and hands back a direct URL to the uploaded file. Visiting that URL with a listener running catches the callback:</p>
+          <pre><code>nc -lvnp 4444</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>An allowlist is only a control if nothing with admin rights can change it. Any CMS that lets an authenticated admin edit its own upload restrictions is one settings change away from arbitrary file upload, and from there, code execution.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Find the attacker's own mistake</div>
+          <p>Poking around as the web user turns up a directory holding a Python XOR script, a handful of <code>.png</code> images, and a note. The note is the attacker talking to themselves: a reminder not to reuse the same XOR key across multiple encrypted messages, because doing so compromises all of them, and a mention that two specific messages in the set were the most important.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>XOR encryption is only secure if the key is never reused. Reusing one key across several messages means that once any part of one message is known or guessed, an attacker (or in this case, the actual attacker's own past self) can start recovering the others. The note is effectively a confession of exactly how to break it.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Pull the images and recover a password</div>
+          <p>A quick Python web server on the target plus <code>wget -r</code> pulls the whole directory down for offline analysis:</p>
+          <pre><code>wget -r 10.10.214.18:8080/</code></pre>
+          <p>Flipping through the decoded images by hand, one of them is actually readable, and it contains a plaintext password. Trying that password against SSH for each of the four blog usernames from step 3 finds the one it belongs to.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Not every piece of leaked data needs to be fully, formally decrypted to be useful, sometimes one readable fragment out of a batch is enough to recover a credential, especially when the attacker's own key-reuse mistake makes some of the set weaker than others.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Fix a locked-out home directory</div>
+          <p>Logging in over SSH with the recovered credential lands a shell, but the user's own home directory is inaccessible, permission denied on their own files. The directory's permissions are simply broken:</p>
+          <pre><code>chmod -u+x+r+w &lt;username&gt;</code></pre>
+          <p>Inside, a file named <code>passwd</code> is owned by root and decrypts to nothing readable, pure binary noise when catted to screen.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A permission-denied error on your own home directory is a configuration bug worth fixing rather than a wall to work around, the fix here is a one-line chmod. The root-owned file inside it is the next real lead, not a dead end.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Identify and decrypt the mystery file</div>
+          <p>Running LinPEAS turns up the answer: that same byte length and format matches <code>/root/.vnc/passwd</code>, a VNC server's own obfuscated password file, and LinPEAS confirms a copy exists there too. SSH config enumeration adds one more useful detail: root login is permitted on the non-standard SSH port.</p>
+          <p>VNC passwords aren't hashed, they're encrypted with a fixed, publicly known key, which makes them fully reversible with the right tool:</p>
+          <pre><code>git clone https://github.com/jeroennijhof/vncpwd
+vncpwd passwd</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>VNC's password obfuscation was never designed to resist a targeted attacker, it uses a hardcoded DES key published in the protocol spec decades ago. Any tool built around that key decrypts it instantly, recognizing the file format is the only real work.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">9</div>
+        <div class="step-body">
+          <div class="step-title">Connect as root and decode the flag</div>
+          <p>With the decrypted password, <code>vncviewer</code> connects directly to the root session on port 5901. From there, a flag file in a hidden directory contains two base32-looking strings, the flag itself and a final taunting note from the attacker, both of which decode cleanly by dropping the text into CyberChef's "Magic" recipe and letting it auto-detect the encoding.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>When a decode chain isn't obvious at a glance, a magic/auto-detect tool like CyberChef's Magic recipe is often faster than guessing encodings by hand, it tries the common transforms and ranks the results by how plausible the output looks.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>Anonymous FTP login
+  &rarr; Wireless capture + note downloaded
+       &rarr; aircrack-ng: WiFi passphrase cracked
+            &rarr; Password reused against 4 CMS blog accounts, one matches
+                 &rarr; concrete5 admin: PHP uploads enabled, webshell uploaded
+                      &rarr; www-data shell via reverse shell callback
+                           &rarr; Attacker's own XOR key-reuse note found
+                                &rarr; Leaked images decoded, a password recovered
+                                     &rarr; SSH as a real user, home dir permissions fixed
+                                          &rarr; Root-owned "passwd" file found
+                                               &rarr; Identified as a VNC password file (LinPEAS)
+                                                    &rarr; vncpwd decrypts it
+                                                         &rarr; vncviewer: root session
+                                                              &rarr; Flag decoded via CyberChef Magic</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>nmap</td><td>Initial service scan</td></tr>
+        <tr><td>Wireshark</td><td>Identifying the FTP-leaked file as an 802.11 capture</td></tr>
+        <tr><td>aircrack-ng</td><td>Offline WPA handshake cracking</td></tr>
+        <tr><td>concrete5 admin panel</td><td>Pivot point from stolen credentials to file upload</td></tr>
+        <tr><td>PentestMonkey PHP reverse shell</td><td>Initial code execution as www-data</td></tr>
+        <tr><td>LinPEAS</td><td>Privilege escalation enumeration, identifies the VNC password file</td></tr>
+        <tr><td>vncpwd</td><td>Decrypts VNC's reversible password obfuscation</td></tr>
+        <tr><td>CyberChef</td><td>Auto-detecting and decoding the final flag file's encoding</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Anonymous access is still worth trying first</div>
+        <p>An FTP server that allows anonymous login handed over the entire first stage of this chain. Checking for it costs nothing and should happen before anything more involved.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Password reuse collapses unrelated systems together</div>
+        <p>A WiFi passphrase and a CMS login had nothing to do with each other technically, except that the same human reused the same password for both.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">XOR key reuse is a self-inflicted wound</div>
+        <p>The attacker's own note described the exact mistake that made their encrypted messages crackable. Reusing a stream cipher key is one of the most well-known, most consequential cryptography errors there is.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Legacy protocols can still have reversible "encryption"</div>
+        <p>VNC's password obfuscation uses a fixed, publicly documented key. Any file in that format should be treated as effectively plaintext to anyone who finds it.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via credential reuse and legacy protocol weaknesses</footer>
+
+</div>
+</body>
+</html>

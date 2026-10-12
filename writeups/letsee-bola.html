@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LetSee.com: a BOLA in the account endpoint</title>
+  <meta name="description" content="A Broken Object Level Authorization (BOLA/IDOR) assessment: an API endpoint that trusts a client-supplied account number with no ownership check, exposing every user's account data to anyone with a valid session.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; API Security</div>
+  <h1>LetSee.com: a BOLA in the account endpoint</h1>
+  <p class="dek">A straightforward Broken Object Level Authorization finding: an authenticated account-lookup endpoint accepts any account number in the URL and never checks whether it belongs to the requesting user.</p>
+
+  <div class="meta-row">
+    <span class="pill">Target: LetSee.com (practice API)</span>
+    <span class="pill">Category: Web / API Security</span>
+    <span class="pill">Tools: Burp Suite</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a practice web app with an authenticated API endpoint for viewing account details. The job: confirm whether authentication alone is standing in for authorization, or whether ownership is actually being checked.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Find the object reference in the request</div>
+          <p>Logging in normally and viewing an account page sends a request with the account number directly in the path:</p>
+          <pre><code>GET /api/accounts/&lt;account-number&gt;</code></pre>
+          <p>That number isn't a session token or an opaque identifier, it's a small, visibly sequential value.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Any identifier that appears directly in a URL or request body, especially a predictable one, is worth testing for authorization, not just authentication. The question isn't "can I reach this endpoint," it's "can I reach someone else's record through it."</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Swap the account number while logged in as yourself</div>
+          <p>Capturing the request in Burp and changing the account number to a value that isn't the logged-in user's own:</p>
+          <pre><code>GET /api/accounts/&lt;someone-else's-account-number&gt;
+Cookie: session=&lt;your own valid session&gt;</code></pre>
+          <p>returns a full, valid response, another user's account data, served to a session that was never granted access to it.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>This is the core of a BOLA/IDOR finding: the endpoint checks that <em>a</em> valid session exists, but never checks that the session belongs to the owner of the object being requested. Authentication and authorization are two different checks, and only the first one is happening here.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Confirm the scope by iterating</div>
+          <p>Since the identifier is small and sequential, a quick sweep across a range of nearby account numbers, still using the same single valid session, confirms the issue isn't a one-off, it's every account on the platform, reachable by any authenticated user.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Confirming scope matters for severity, not just existence. "One account leaked" and "every account is enumerable with one valid login" are very different findings to report, even though the underlying flaw is identical.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Authentication is not authorization</div>
+        <p>An endpoint can correctly reject unauthenticated requests and still fail completely at checking whether the authenticated user owns the resource they're asking for.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Predictable object identifiers raise the stakes</div>
+        <p>A BOLA against a sequential integer ID is trivially scriptable into full enumeration. UUIDs don't fix the underlying authorization gap, but they do remove the easy sweep.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Always test with two accounts</div>
+        <p>A single test account can confirm an endpoint works. It takes a second account, and the deliberate attempt to cross the boundary between them, to confirm it's actually secure.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>Solved via manual object-ID substitution testing with Burp Suite</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Matrix: Exit Denied, a forum, a cipher chain, and four flags</title>
+  <meta name="description" content="A TryHackMe Matrix: Exit Denied walkthrough: forum OSINT, a credential-spray against admin accounts, a multi-layer cipher puzzle, session hijacking via cookies, SSH brute force under a synced clock, and a SUID pandoc privilege escalation.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Matrix: Exit Denied, a forum, a cipher chain, and four flags</h1>
+  <p class="dek">A forum that leaks its own staff roster, a credential-spray attack built from a vulnerability report nobody secured, a cipher puzzle three layers deep, a stolen session cookie, a time-synced SSH brute force, and a SUID binary that overwrites its way to root.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Matrix: Exit Denied</span>
+    <span class="pill">Category: Web / OSINT / Linux Privesc</span>
+    <span class="pill">Tools: Burp Suite, Gobuster, John the Ripper</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a Linux-Bay forum, a bug bounty report that was never actually secured, and a trail of puzzles hidden behind each layer of access. The job: work from anonymous forum browsing all the way to root, picking up four separate flags along the way.</p>
+    <p>Flags intentionally omitted below, this is about the path, not the values.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Enumerate the site and the forum's staff list</div>
+          <p>A directory scan turns up a long list of paths, admin panels, upload folders, an archive directory, far more surface than the front page suggests. The site itself is a MyBB forum, and browsing it without even logging in exposes the full staff roster, super moderators, admins, and regular moderators alike.</p>
+          <pre><code>gobuster dir -u http://&lt;target&gt; -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Forum software often exposes its member/staff list by design, for transparency, not realizing it's handing attackers a ready-made target list. Combined with a wide directory scan, this is pure reconnaissance: know who to target before attacking anything.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Register an account and dig through a user's posts</div>
+          <p>One staff member's profile is hinted at elsewhere on the site. Creating a throwaway forum account and searching their post history for clues turns up a reference to an internal bug bounty program, and a path to its report form.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A forum's own search feature is a reconnaissance tool once you have an account. Internal programs mentioned casually in old posts are exactly the kind of detail that doesn't show up in an automated scan.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Read an unsecured vulnerability report for a credential list</div>
+          <p>The bug bounty submission form itself is disabled, but its client-side source (viewed via the browser's inspector) references a results page that was never actually locked down. That page lists a backlog of previously reported vulnerabilities, including one flagging that the forum's login has no CAPTCHA or lockout, protecting against password spraying, and a list of common weak passwords the reporter used to prove it.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A disabled front-end form doesn't mean the backend page is gone, it just means the usual path to it is hidden. And a security report describing a weakness is itself a roadmap if the report page is reachable by anyone.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Spray the staff list against the leaked weak passwords</div>
+          <p>With a list of staff usernames from step 1 and a list of weak passwords from the vulnerability report, Burp Intruder's cluster bomb attack (every username against every password) against the login endpoint finds valid credentials by comparing response lengths, the real hits stand out immediately from the uniform "invalid login" responses.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Credential spraying works precisely because most login failures look identical, a response of a different length or status is a reliable tell for a match, no manual checking of every attempt required.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Work through a layered cipher puzzle</div>
+          <p>Hidden page content leads through several encoding layers in sequence: a numeric string that turns out to be an A1Z26 cipher (numbers mapping to letters) decodes to a hint about "a permutation of letters," a second binary string decodes to ASCII text that turns out to be a directory name, and that directory holds a page whose source contains a long string of Chinese characters, each one secretly representing one of six specific English letters. Extracting just those letters and brute-forcing every arrangement of them (a permutation, following the earlier hint) eventually opens the next door.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>None of these individual encodings are strong, A1Z26, binary, and a character substitution are all textbook puzzle layers. The challenge is recognizing each one for what it is and chaining the decodes in the right order, exactly the kind of pattern-matching that gets faster with CTF experience.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Hijack a session by swapping cookies</div>
+          <p>A private forum message between two staff members references an internal build directory that seems to be offline. Inspecting the browser's stored cookies for that domain and swapping the session cookie value for a different staff member's session logs the browser in as that user on refresh, no credentials needed at all.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A session cookie is the entire proof of identity for most web logins. If a cookie value tied to another account can simply be substituted in and accepted, session management itself is the vulnerability, no password required.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Pull an SSH credential out of an OTP scheme and brute-force it under a synced clock</div>
+          <p>The hijacked account's private attachments include documentation for an SSH login protected by time-based one-time passwords, along with several candidate shared-secret tokens. A small purpose-built script tries each token's generated OTP against SSH, but only succeeds if the attacking machine's clock is tightly synced to UTC first:</p>
+          <pre><code>TZ=UTC sudo python3 matrixbrute.py --full-time</code></pre>
+          <p>Once the clock is right, the brute force succeeds within its short validity window and SSH access follows.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>TOTP codes are only valid for a short rolling window, usually 30 seconds, tied to wall-clock time. A brute-force attempt against a TOTP-protected login has to respect that same clock or every attempt will be rejected regardless of whether the underlying secret is correct.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Escalate through a SUID pandoc binary</div>
+          <p>Hunting for SUID binaries on the box turns up <code>pandoc</code>, document conversion software not normally run with elevated privileges. Pandoc can convert between arbitrary formats, including writing its own output file, which makes it capable of overwriting <code>/etc/passwd</code> with a version that sets a known password hash for root:</p>
+          <pre><code>cp /etc/passwd .
+openssl passwd &lt;new-password&gt;
+<span class="cm"># paste the resulting hash into the passwd copy, replacing root's x</span>
+pandoc passwd -t plain -o /etc/passwd
+su root</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Any SUID binary capable of writing to an arbitrary output path is a privilege escalation risk if that output path can be a sensitive system file. Pandoc was never designed as an attack tool, but "converts and writes files" plus "runs as root" adds up to exactly that.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>gobuster + forum browsing &rarr; staff roster and wide directory list exposed
+  &rarr; registered account &rarr; post history leaks a bug bounty program
+       &rarr; unsecured report page &rarr; weak-password list leaked
+            &rarr; Burp Intruder cluster bomb &rarr; staff credentials found
+                 &rarr; multi-layer cipher chain &rarr; hidden directory unlocked
+                      &rarr; cookie swap &rarr; session hijacked, no password needed
+                           &rarr; TOTP brute force (clock-synced) &rarr; SSH access
+                                &rarr; SUID pandoc &rarr; /etc/passwd overwritten, root</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Disabled front-ends don't mean the backend is gone</div>
+        <p>A form that's visually turned off is still worth checking for a reachable results page, API, or endpoint behind it.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A vulnerability report is a roadmap if it's exposed</div>
+        <p>Documentation of a weakness, written for defenders, is exactly as useful to an attacker if it's not access-controlled.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Session cookies need to be bound to more than just a value</div>
+        <p>If swapping in another valid session's cookie value is enough to become that user, session management itself needs hardening, independent of password strength.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Time-based codes require a correctly set clock, for both sides</div>
+        <p>Attacking (or defending) a TOTP scheme means respecting the same time window the algorithm does, a wrong clock defeats a correct secret just as surely as a wrong secret does.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via OSINT, credential spraying, cipher puzzles, and SUID privilege escalation</footer>
+
+</div>
+</body>
+</html>

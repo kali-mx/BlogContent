@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CMess: a Gila CMS chain from leaked creds to a wildcard cron privesc</title>
+  <meta name="description" content="A TryHackMe CMess walkthrough: subdomain fuzzing, leaked admin credentials in a support chat, a file-manager webshell upload, and privilege escalation through a tar wildcard injection in a cron job.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>CMess: a Gila CMS chain from leaked creds to a wildcard cron privesc</h1>
+  <p class="dek">A hidden subdomain, admin credentials sitting in plain sight in a support chat transcript, a file manager that uploads PHP just fine, and a root cron job undone by its own use of a wildcard.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: CMess (Gila CMS)</span>
+    <span class="pill">Category: Web / Linux Privesc</span>
+    <span class="pill">Tools: Gobuster, ffuf</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a Gila CMS install with a support feature that logs more than it should, and a cron job that trusts filenames it shouldn't. The job: find the leaked credentials, get code execution through the admin panel, and abuse the cron job's own tar command to become root.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Fuzz for the real subdomain</div>
+          <p>The base site is mostly static, but subdomain fuzzing against the target's domain turns up a separate host running the actual Gila CMS application.</p>
+          <pre><code>ffuf -u http://FUZZ.&lt;domain&gt; -H "Host: FUZZ.&lt;domain&gt;" -w /usr/share/wordlists/subdomains.txt</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Organizations often spin up a CMS or admin panel on a subdomain they don't link to from the main site. DNS/vhost fuzzing finds what a crawler never will.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Find leaked credentials in a support chat</div>
+          <p>The CMS has a live-chat/support widget, and its transcript history is browsable without authentication. Buried in an old conversation, a staff member pastes their own admin username and password while troubleshooting with a colleague.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Support and chat logs are a chronically underestimated leak source. People paste credentials into "private" conversations assuming no one else will ever read them, but if the transcript is stored and reachable, it's just another file to find.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Upload a webshell through the admin file manager</div>
+          <p>Logged into the Gila CMS admin panel, the built-in file manager accepts a <code>.php</code> upload with no content-type or extension filtering. Dropping a simple PHP web shell and requesting it directly executes commands on the server.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>An authenticated file-upload feature in a CMS admin panel is a code-execution primitive by default unless it explicitly restricts extensions and validates content. "Admin can upload files" quietly means "admin can upload a shell" far more often than CMS vendors intend.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Spot a cron job archiving a world-writable directory</div>
+          <p>Enumeration on the box turns up a cron job running as root that periodically runs <code>tar</code> with a wildcard over a directory the low-privilege web user can write to:</p>
+          <pre><code>tar -czf /backup.tar.gz *</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Shell wildcard expansion happens before the command runs, and <code>tar</code> treats certain filenames starting with a dash as command-line flags, not filenames. Any writable directory feeding a wildcard into tar (or similar tools) is a known, well-documented privilege-escalation pattern.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Exploit the tar wildcard for root</div>
+          <p>Dropping specially-named files into that writable directory, filenames crafted to be interpreted by <code>tar</code> as its own checkpoint/exec flags, smuggles an arbitrary command into the next cron run, executed as root:</p>
+          <pre><code>echo 'cp /bin/bash /tmp/rootbash; chmod +s /tmp/rootbash' &gt; shell.sh
+touch -- "--checkpoint=1"
+touch -- "--checkpoint-action=exec=sh shell.sh"</code></pre>
+          <p>On the cron's next run, <code>tar</code> parses those filenames as options instead of archive members and executes the script as root, leaving behind a SUID root shell.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>This is the classic GTFOBins tar wildcard technique: because <code>tar *</code> expands to every filename in the directory, including attacker-chosen ones, and tar's own checkpoint/exec flags can trigger arbitrary commands, a world-writable directory plus a wildcard tar invocation is effectively a root shell waiting to be claimed.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>ffuf: hidden Gila CMS subdomain found
+  &rarr; support chat transcript: admin credentials leaked in plain text
+       &rarr; admin file manager: PHP webshell uploaded
+            &rarr; enumeration: root cron job running tar with a wildcard
+                 &rarr; crafted filenames smuggle a command into tar's own flags
+                      &rarr; SUID root shell dropped on the next cron run</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Support logs are an underrated credential leak source</div>
+        <p>Any stored transcript, chat log, or ticket history is worth checking for pasted secrets, people treat them as private when they often aren't.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">File managers are upload-based RCE unless proven otherwise</div>
+        <p>An admin panel's file upload feature should always be tested for extension and content-type enforcement, not assumed safe because it's "just for images."</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Wildcards in privileged shell commands are dangerous</div>
+        <p><code>tar</code>, <code>chown</code>, <code>rsync</code>, and several other common tools interpret certain filenames as flags. A root cron job expanding a wildcard over a writable directory is a well-known, reliable privesc path.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via credential leakage, webshell upload, and a tar wildcard injection</footer>
+
+</div>
+</body>
+</html>

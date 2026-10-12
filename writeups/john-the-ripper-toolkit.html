@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>John the Ripper: a working reference, not just a wordlist run</title>
+  <meta name="description" content="A practical John the Ripper reference: identifying hash formats, unshadowing Linux credentials, single-crack mode, cracking archives and SSH keys, and writing custom mangling rules.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; Tooling Reference</div>
+  <h1>John the Ripper: a working reference, not just a wordlist run</h1>
+  <p class="dek">Most John the Ripper usage stops at a wordlist against a hash file. The more useful half is everything around that: identifying what you're even looking at, pulling hashes out of real-world formats, and writing rules that mangle a wordlist instead of just running it as-is.</p>
+
+  <div class="meta-row">
+    <span class="pill">Category: Password Cracking</span>
+    <span class="pill">Tools: John the Ripper, hashid</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>Purpose:</strong> a consolidated reference for the John the Ripper techniques that come up repeatedly: format identification, Linux credential unshadowing, archive and SSH key cracking, and custom rule-based mangling.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Reference</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Identify the hash before guessing a mode</div>
+          <p>Before cracking anything, confirm what format it actually is:</p>
+          <pre><code>hashid '&lt;hash string&gt;'</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>John supports dozens of formats, and guessing wrong wastes time running the wrong attack against a hash it will never crack. A ten-second identification step avoids that entirely.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Unshadow Linux passwd/shadow pairs</div>
+          <p>A raw <code>/etc/shadow</code> file isn't directly crackable on its own, it needs merging with <code>/etc/passwd</code> first:</p>
+          <pre><code>unshadow passwd.txt shadow.txt &gt; combined.txt
+john combined.txt --wordlist=/usr/share/wordlists/rockyou.txt</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>shadow</code> holds the hashes, <code>passwd</code> holds the usernames and UIDs that map to them, John needs both joined together in one file to know which hash belongs to which account.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Try single-crack mode before a full wordlist</div>
+          <p>John's single-crack mode generates guesses from the username and any available GECOS field data (full name, etc.) in the password file itself, no external wordlist required:</p>
+          <pre><code>john --single --format=&lt;format&gt; combined.txt</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>People reuse their own name, username, or small variations of it as passwords constantly. Single-crack mode catches this class of weak password almost instantly, before paying the cost of a full wordlist run.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Crack password-protected archives and SSH keys</div>
+          <p>John's companion scripts convert common container formats into a crackable hash first:</p>
+          <pre><code>zip2john protected.zip &gt; zip.hash
+rar2john protected.rar &gt; rar.hash
+ssh2john id_rsa &gt; ssh.hash
+john --wordlist=/usr/share/wordlists/rockyou.txt zip.hash</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A zip, rar, or encrypted SSH private key isn't a "hash" in the usual sense, these helper scripts extract the specific data John needs to brute-force the passphrase protecting the container, in a format John's core engine understands.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Write custom mangling rules for a smarter wordlist</div>
+          <p>Plain wordlists miss predictable variations, a capitalized first letter, a trailing year, a leetspeak substitution. John's rule engine in <code>john.conf</code> generates those variations from a base wordlist without manually writing out every permutation:</p>
+          <pre><code>[List.Rules:Custom]
+c $[0-9] $[0-9]
+
+john --wordlist=base.txt --rules=Custom combined.txt</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Most real-world weak passwords aren't raw dictionary words, they're a dictionary word plus a predictable tweak. A well-written rule set covers far more realistic password space per wordlist entry than brute-forcing character by character ever could.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>hashid</td><td>Identify an unknown hash's format before choosing an attack mode</td></tr>
+        <tr><td>unshadow</td><td>Merge passwd and shadow files into one crackable target</td></tr>
+        <tr><td>zip2john / rar2john / ssh2john</td><td>Extract a crackable hash from an archive or private key</td></tr>
+        <tr><td>john (single, wordlist, rules modes)</td><td>The cracking engine itself, across every attack style above</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>Reference notes compiled from hands-on John the Ripper practice</footer>
+
+</div>
+</body>
+</html>

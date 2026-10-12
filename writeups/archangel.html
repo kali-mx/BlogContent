@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Archangel: SSRF to local file read to cron privesc</title>
+  <meta name="description" content="A TryHackMe Archangel walkthrough: virtual-host discovery, chaining an SSRF into local file inclusion to read a Flask app's source, cracking a hashed password, and privesc via a world-writable cron script.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Archangel: SSRF to local file read to cron privesc</h1>
+  <p class="dek">A hidden virtual host, an SSRF that reads arbitrary files through a Python web app's own image-fetching feature, a cracked password hash, and a root shell by abusing a cron job that runs as root but is writable by everyone.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Archangel</span>
+    <span class="pill">Category: Web / SSRF / Linux Privesc</span>
+    <span class="pill">Tools: Gobuster, Hashcat, Pspy</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a web server hides more than its default page lets on. The job: find the real application behind a virtual host, turn a feature meant for fetching images into a way to read local files, and ride a careless cron job all the way to root.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Find the real site behind the virtual host</div>
+          <p>The default Apache page gives nothing away, but it references a domain name. Adding that to <code>/etc/hosts</code> and re-requesting the site reveals an entirely different application, a Python/Flask app for "Villain Hunters," not the stock Apache page at all.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Name-based virtual hosting means the same IP can serve completely different sites depending on the <code>Host</code> header. A default landing page is often a decoy, the real target is one DNS entry away.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Spot the SSRF in an image loader</div>
+          <p>The site has a page that renders an image from a URL parameter, built to pull hero portraits from a remote path. Pointing that same parameter at a local file path instead of a URL:</p>
+          <pre><code>http://&lt;vhost&gt;/image?filename=/etc/passwd</code></pre>
+          <p>returns the file's contents rendered back as if it were an image, proving the parameter isn't validated as a URL at all, it's passed straight through to a file read.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Any feature that fetches a resource from user-supplied input is a candidate for SSRF. Here it goes one step further: because the backend is a local file read dressed up as a URL fetch, it becomes a full Local File Inclusion primitive, not just a way to reach internal services.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Read the application's own source code</div>
+          <p>Since the app is a Flask project, its own source file is readable the same way:</p>
+          <pre><code>http://&lt;vhost&gt;/image?filename=/var/www/&lt;app&gt;/main.py</code></pre>
+          <p>The source reveals a hardcoded database path and, critically, how the app itself handles user records, pointing at a SQLite database file that's worth pulling the same way.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>An LFI primitive isn't just useful for reading <code>/etc/passwd</code>, it's a way to read the application's own blueprint. Source code tells you exactly what file paths and credentials the app already trusts.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Pull the database and crack a password</div>
+          <p>Fetching the SQLite file through the same LFI and opening it locally turns up a user table with a hashed password. Hashcat makes short work of it against a weak wordlist match, recovering a plaintext credential for SSH.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A database file is just another file to an unvalidated path parameter. Once it's local, it's no different from any other credential-cracking exercise, the hard part was getting it off the server in the first place.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Watch for root running a world-writable script</div>
+          <p>With a shell as a low-privilege user, <code>pspy</code> (a process-spying tool that needs no special privileges) reveals a cron job running periodically as root, executing a script sitting in a directory the current user can write to.</p>
+          <pre><code>./pspy64</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Static enumeration (checking crontab files) can miss jobs defined elsewhere, like systemd timers or jobs dropped by other scripts. Watching what actually executes over time catches what a one-time file listing won't.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Hijack the cron script for a root shell</div>
+          <p>Appending a reverse shell line to the script root's cron job executes, then waiting for the next scheduled run, lands a shell running as root the moment cron fires.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A script's permissions don't change based on who triggers it, cron runs it as whatever user owns the job, root in this case, regardless of who last edited the file. Writable-by-anyone plus run-by-root is a privilege escalation path almost every time.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>Apache default page &rarr; hidden vhost found via /etc/hosts
+  &rarr; Flask app's image loader takes a raw file path (SSRF / LFI)
+       &rarr; app's own main.py read, reveals the SQLite DB path
+            &rarr; DB pulled, password hash cracked offline
+                 &rarr; SSH in as a low-privilege user
+                      &rarr; pspy catches a root cron job on a writable script
+                           &rarr; script hijacked, root shell on next run</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Virtual hosts hide real attack surface</div>
+        <p>A default Apache page proves nothing about what else the server serves. Always check for named virtual hosts before concluding a target is uninteresting.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">An image fetcher is a file-read primitive in disguise</div>
+        <p>Any "load a resource from this parameter" feature deserves a local-path test, not just a remote-URL test.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Watch what runs, don't just read what's scheduled</div>
+        <p>pspy-style process monitoring catches privileged jobs that static crontab enumeration can miss entirely.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via SSRF/LFI chaining and cron privilege escalation</footer>
+
+</div>
+</body>
+</html>

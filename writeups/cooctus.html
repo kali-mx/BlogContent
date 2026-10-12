@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cooctus Stories: an NFS leak and a sudo unmount escape to root</title>
+  <meta name="description" content="A TryHackMe Cooctus Stories walkthrough: an open NFS share leaking credentials, a ROT13 puzzle, exposed git history, and privilege escalation by abusing sudo rights over a mount command.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Cooctus Stories: an NFS leak and a sudo unmount escape to root</h1>
+  <p class="dek">An open NFS export hands over credentials with no authentication at all, git history exposes more than a careless commit, and a narrowly scoped sudo rule over a mount command turns out to be a way to read the entire filesystem as root.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Cooctus Stories</span>
+    <span class="pill">Category: Web / Linux Privesc</span>
+    <span class="pill">Tools: showmount, git log, sudo -l</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> an NFS share nobody locked down, a git repository with history still intact, and a sudo rule that looks harmless in isolation. The job: chain all three into root.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Enumerate and mount the open NFS share</div>
+          <p>NFS is open with no authentication. Listing and mounting the export hands over its contents directly:</p>
+          <pre><code>showmount -e &lt;target&gt;
+mkdir /tmp/nfs &amp;&amp; sudo mount -t nfs &lt;target&gt;:/&lt;share&gt; /tmp/nfs</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>NFS exports are often configured by IP/hostname trust rather than credentials. An export with no restriction means anyone who can reach the port can read (or write) its contents as if they were local files.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Decode a small cipher puzzle</div>
+          <p>Among the mounted files sits a short string that isn't quite readable, a classic ROT13 rotation. Decoding it by hand or with a quick tool reveals a hint pointing at where to look next.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>ROT13 isn't security, it's obfuscation meant to avoid spoiling a hint at a glance, not to resist a determined read. Recognizing the "every letter looks slightly wrong but the word shapes are right" pattern is usually enough to spot it instantly.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Pull credentials out of git history</div>
+          <p>A project directory on the share turns out to be a git repository. The current files look clean, but the commit history tells a different story:</p>
+          <pre><code>git log --all --oneline
+git diff &lt;commit-1&gt; &lt;commit-2&gt;</code></pre>
+          <p>An earlier commit contains a credential that was later removed from the working tree, but never purged from history.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Deleting a secret in a new commit doesn't delete it from the repository, it's still sitting in every prior commit unless history itself is rewritten and force-pushed. <code>git log</code> and <code>git diff</code> across commits are standard first moves whenever a <code>.git</code> directory is reachable.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Check sudo rights after logging in</div>
+          <p>The recovered credentials work over SSH. Once logged in, checking what the account is allowed to run as root is the very next move:</p>
+          <pre><code>sudo -l</code></pre>
+          <p>The account can run <code>mount</code> (and its counterpart <code>umount</code>) as root, with no further restriction on arguments.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>sudo -l</code> is the single highest-value command to run on any freshly obtained shell. A narrowly named command in a sudoers entry can still be a full privilege escalation if that command is powerful enough on its own, mount and unmount absolutely qualify.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Abuse mount/umount for a root filesystem view</div>
+          <p>Unmounting a bind-mounted restricted directory, then remounting the real root filesystem over an accessible mount point, exposes the entire disk, including <code>/root</code>, to the current unprivileged user.</p>
+          <pre><code>sudo umount /some/restricted/mount
+sudo mount --bind / /mnt</code></pre>
+          <p>From there, a private SSH key sitting in root's home directory grants a direct, fully privileged login.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Mount operations don't just attach new filesystems, they can remount or rebind existing ones in ways that bypass whatever restriction put them there in the first place. Sudo access to mount is effectively sudo access to the entire filesystem.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>showmount: open NFS export found, no auth required
+  &rarr; mounted share: a ROT13-encoded hint found
+       &rarr; decoded hint: points to a git repository on the share
+            &rarr; git log/diff: a removed credential still sits in history
+                 &rarr; SSH login with the recovered credential
+                      &rarr; sudo -l: unrestricted mount/umount rights
+                           &rarr; remount root filesystem: root's SSH key exposed</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">NFS exports need the same scrutiny as any network share</div>
+        <p>An export with no IP or auth restriction is effectively a public read (or write) of whatever it serves.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Git history outlives the files you meant to protect</div>
+        <p>A secret removed in a later commit is still recoverable from the repository's history unless that history itself is rewritten.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Narrow-sounding sudo rules deserve a second look</div>
+        <p><code>sudo -l</code> is step one on any new shell. A single permitted command, if powerful enough, is a full privilege escalation on its own.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via NFS enumeration, git history recovery, and sudo mount abuse</footer>
+
+</div>
+</body>
+</html>

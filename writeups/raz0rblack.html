@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Raz0rBlack: an NFS leak into AS-REP roasting and a hex-encoded flag</title>
+  <meta name="description" content="A TryHackMe Raz0rBlack walkthrough: an open NFS share leaking a staff roster, AS-REP roasting a disabled-preauth account, a forced password reset trick, and chasing a trail of encoded credentials to the domain's root flag.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
+  <h1>Raz0rBlack: an NFS leak into AS-REP roasting and a hex-encoded flag</h1>
+  <p class="dek">An open NFS export hands over a staff spreadsheet, that becomes a username list for AS-REP roasting, a forced password reset turns read-only SMB access into a usable account, and a trail of encoded credentials leads from a zipped archive to the domain's final secret.</p>
+
+  <div class="meta-row">
+    <span class="pill">Room: Raz0rBlack</span>
+    <span class="pill">Category: Active Directory</span>
+    <span class="pill">Tools: Kerbrute, Impacket, Hashcat, CrackMapExec</span>
+  </div>
+
+  <div class="brief">
+    <p><strong>The setup:</strong> a domain controller with an open NFS export, a spreadsheet of staff names, and layers of encoded credentials scattered across shares. The job: turn a leaked file into a username list, a username into a hash, and a hash into full access.</p>
+  </div>
+
+  <section>
+    <h2 class="section-title">The Investigation</h2>
+    <div class="steps">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Map the domain and mount an open NFS export</div>
+          <p>A service scan shows the usual AD fingerprint, Kerberos, LDAP, SMB, naming the domain outright. NFS being open on top of that is unusual enough to check:</p>
+          <pre><code>showmount -e &lt;target&gt;
+sudo mount -t nfs vers=2 &lt;target&gt;:/users ./smb</code></pre>
+          <p>Mounted, it contains a staff spreadsheet (<code>.xlsx</code>), converted to CSV for easy reading with <code>xlsx2csv</code>.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>NFS being open at all on a Windows domain controller is already an anomaly worth chasing. A staff roster isn't a vulnerability by itself, but it's a ready-made username list for everything that follows.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Enumerate and AS-REP roast a pre-auth-exempt account</div>
+          <p>Feeding the names from the spreadsheet into <code>kerbrute</code> confirms valid accounts, and flags one with <code>[NOT PREAUTH]</code>. Requesting that account's hash needs no password at all:</p>
+          <pre><code>kerbrute -users userlist.txt -dc raz0rblack.thm -domain raz0rblack.thm -t 100
+GetNPUsers.py raz0rblack.thm/&lt;user&gt;</code></pre>
+          <p>Hashcat cracks the resulting <code>$krb5asrep$</code> hash against a standard wordlist in seconds.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Same pattern as any AS-REP roasting target: a disabled pre-authentication flag means anyone can request a crackable ticket hash for that account without ever supplying a password.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Force a password reset to unlock read access</div>
+          <p>The cracked account's SMB login works, but <code>crackmapexec</code> reports <code>STATUS_PASSWORD_MUST_CHANGE</code>. <code>smbpasswd</code> satisfies that requirement directly, setting a new, known password:</p>
+          <pre><code>smbpasswd -r &lt;target&gt; -U &lt;user&gt;</code></pre>
+          <p>With the new password set, <code>smbmap</code> shows the account now has read access to a share previously inaccessible.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A password-must-change flag isn't a wall, it's a prompt, and an attacker who already has valid (if expired) credentials can satisfy it exactly like a legitimate user would. Afterward, the account behaves as fully active.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Pull down and crack a password-protected archive</div>
+          <p>The newly readable share contains a chat log and a password-protected zip. Downloading the whole directory and converting the archive's encryption to a crackable hash format turns up the zip's password via a standard wordlist run, revealing a system registry hive and the domain's NTDS database inside.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A password-protected archive is still only as strong as its password. Once it's local, cracking it offline is no different from cracking any other password hash, no rate limiting, no lockout.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Decode a stored credential and reach the domain's secret</div>
+          <p>A saved credential file (an exported PowerShell <code>CliXml</code> object) sitting in a user's home directory decodes cleanly once accessed as that same user, and the domain's root-level secret turns up in a second file as hex-encoded text, readable with a quick CyberChef decode.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Exported PowerShell credentials are tied to the user and machine that created them, by design, but they decode trivially once an attacker is operating as that exact user. Hex encoding, like ROT13 or base64, is obfuscation, not protection, once you're looking at the right file.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Full Attack Chain</h2>
+    <pre><code>NFS export (open, no auth) &rarr; staff roster leaked
+  &rarr; Kerbrute: valid usernames confirmed, one flagged NOT PREAUTH
+       &rarr; GetNPUsers.py + hashcat: AS-REP hash cracked
+            &rarr; smbpasswd: forced password reset unlocks SMB read access
+                 &rarr; encrypted zip downloaded and cracked offline
+                      &rarr; exported PS credential decoded as the right user
+                           &rarr; hex-encoded secret decoded via CyberChef</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Takeaways</h2>
+    <div class="skills">
+      <div class="skill">
+        <div class="skill-title">An open NFS export on a Windows domain is always worth checking</div>
+        <p>It's not a default service for AD, so finding it open at all is itself a signal something was misconfigured.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A forced password change is satisfiable, not blocking</div>
+        <p>Cracked, expired credentials are still credentials, resetting the password is usually a single command away.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Layered encoding slows down automation, not a determined reader</div>
+        <p>Hex, base64, and password-protected archives each add a step, but none of them resist someone willing to decode one layer at a time.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>tryhackme.com &middot; solved via NFS enumeration, AS-REP roasting, and credential decoding</footer>
+
+</div>
+</body>
+</html>

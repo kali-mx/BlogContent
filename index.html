@@ -18,6 +18,78 @@
   <section>
     <h2 class="section-title">Latest</h2>
     <div class="writeup-list">
+      <a class="writeup-card" href="writeups/matrix-exit-denied.html">
+        <div class="wc-title">Matrix: Exit Denied, a forum, a cipher chain, and four flags</div>
+        <div class="wc-dek">Forum OSINT into a credential spray, a three-layer cipher puzzle, a hijacked session cookie, a clock-synced TOTP brute force, and a SUID pandoc binary escalating all the way to root.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / OSINT</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/raz0rblack.html">
+        <div class="wc-title">Raz0rBlack: an NFS leak into AS-REP roasting and a hex-encoded flag</div>
+        <div class="wc-dek">An open NFS export leaking a staff roster, AS-REP roasting a disabled-preauth account, a forced password reset, and a trail of encoded credentials to the domain's final secret.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Active Directory</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/for-business-reasons.html">
+        <div class="wc-title">For Business Reasons: WordPress to Docker escape via lxd</div>
+        <div class="wc-dek">A WordPress credential brute force, a plugin-editor reverse shell, a Chisel tunnel into a nested Docker network, and root via lxd group membership.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / Pivoting</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/gila-cms.html">
+        <div class="wc-title">CMess: a Gila CMS chain from leaked creds to a wildcard cron privesc</div>
+        <div class="wc-dek">Subdomain fuzzing, admin credentials leaked in a support chat, a file-manager webshell upload, and a tar wildcard injection in a root cron job.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / Linux Privesc</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/cooctus.html">
+        <div class="wc-title">Cooctus Stories: an NFS leak and a sudo unmount escape to root</div>
+        <div class="wc-dek">An open NFS share, a ROT13 hint, credentials recovered from git history, and root via a narrowly scoped sudo mount rule.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / Linux Privesc</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/boiler-ctf.html">
+        <div class="wc-title">Boiler CTF: WordPress plugin RCE to a SUID binary root shell</div>
+        <div class="wc-dek">A WordPress login brute force, a vulnerable plugin turned reverse shell, and root through a custom SUID binary with a hijackable PATH.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / Linux Privesc</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/archangel.html">
+        <div class="wc-title">Archangel: SSRF to local file read to cron privesc</div>
+        <div class="wc-dek">A hidden virtual host, an SSRF/LFI chain through a Flask image loader, a cracked password hash, and root via a world-writable cron script.</div>
+        <div class="wc-meta">
+          <span class="pill">TryHackMe</span>
+          <span class="pill">Web / SSRF</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/letsee-bola.html">
+        <div class="wc-title">LetSee.com: a BOLA in the account endpoint</div>
+        <div class="wc-dek">An authenticated account-lookup API that never checks object ownership, exposing every user's data to any valid session.</div>
+        <div class="wc-meta">
+          <span class="pill">API Security</span>
+          <span class="pill">BOLA / IDOR</span>
+        </div>
+      </a>
+      <a class="writeup-card" href="writeups/john-the-ripper-toolkit.html">
+        <div class="wc-title">John the Ripper: a working reference, not just a wordlist run</div>
+        <div class="wc-dek">Hash format identification, unshadowing, single-crack mode, cracking archives and SSH keys, and writing custom mangling rules.</div>
+        <div class="wc-meta">
+          <span class="pill">Tooling Reference</span>
+          <span class="pill">Password Cracking</span>
+        </div>
+      </a>
       <a class="writeup-card" href="writeups/attacktive-directory.html">
         <div class="wc-title">Attacktive Directory: from AS-REP roast to domain admin</div>
         <div class="wc-dek">Enumerating valid usernames, AS-REP roasting a pre-auth-exempt account, pivoting through a leftover credentials file on an SMB share, and DCSync-ing the domain to a full admin shell via pass-the-hash.</div>

